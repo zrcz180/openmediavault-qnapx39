@@ -25,6 +25,8 @@ class OMVRpcServiceQnapx39 extends \OMV\Rpc\ServiceAbstract
 		$this->registerMethod("getGauges");
 		$this->registerMethod("getDisks");
 		$this->registerMethod("getDevice");
+		$this->registerMethod("setButtonSettings");
+		$this->registerMethod("getTasks");
 	}
 
 	/**
@@ -212,11 +214,24 @@ class OMVRpcServiceQnapx39 extends \OMV\Rpc\ServiceAbstract
 				$read("/proc/cpuinfo"), $m)) {
 			$cpu = preg_replace('/\s+/', ' ', $m[1]);
 		}
-		$board = trim($read("/sys/class/dmi/id/board_vendor") . " " .
-			$read("/sys/class/dmi/id/board_name"));
+		$dmi = function($name) use ($read) {
+			$value = $read("/sys/class/dmi/id/" . $name);
+			// Placeholders BIOS vendors leave in empty DMI fields.
+			return preg_match('/^(|none|default string|to be filled.*|' .
+				'not specified|system (product name|serial number)|' .
+				'0+|123456789)$/i', $value) ? "" : $value;
+		};
+		$board = trim($dmi("board_vendor") . " " . $dmi("board_name"));
+		$model = trim($dmi("sys_vendor") . " " . $dmi("product_name"));
+		$serial = $dmi("product_serial") ?: $dmi("board_serial");
+		$bios = trim($dmi("bios_version") . ($dmi("bios_date") ?
+			" (" . $dmi("bios_date") . ")" : ""));
 		$status = $this->daemonStatus();
 		$problems = $status["problems"] ?? [];
 		$rows = [
+			["property" => gettext("Model"), "value" => $model ?: $board],
+			["property" => gettext("Serial number"), "value" => $serial],
+			["property" => gettext("BIOS"), "value" => $bios],
 			["property" => gettext("Host name"), "value" => gethostname()],
 			["property" => gettext("Processor"), "value" => $cpu],
 			["property" => gettext("Board"), "value" => $board],
@@ -229,5 +244,51 @@ class OMVRpcServiceQnapx39 extends \OMV\Rpc\ServiceAbstract
 					implode("; ", $problems))]
 		];
 		return $this->applyFilter($rows, 0, count($rows), null, null);
+	}
+
+	/**
+	 * Buttons page: only its own fields.
+	 */
+	public function setButtonSettings($params, $context)
+	{
+		$this->validateMethodContext($context, ["role" => OMV_ROLE_ADMINISTRATOR]);
+		$this->validateMethodParams($params, "rpc.qnapx39.setbuttonsettings");
+		$uuids = array_column($this->getTasks([], $context), "uuid");
+		foreach (["usbcopytask", "resettask"] as $key) {
+			if (!in_array($params[$key], $uuids, TRUE)) {
+				throw new \OMV\Exception(gettext(
+					"The selected scheduled task no longer exists."));
+			}
+		}
+		$db = \OMV\Config\Database::getInstance();
+		$object = $db->get("conf.service.qnapx39");
+		$object->setAssoc($params);
+		$db->set($object);
+		return $object->getAssoc();
+	}
+
+	/**
+	 * Scheduled Tasks a button can run, "None" first. qnapx39d runs the
+	 * script OMV writes for the task, as the task's user.
+	 */
+	public function getTasks($params, $context)
+	{
+		$this->validateMethodContext($context, ["role" => OMV_ROLE_ADMINISTRATOR]);
+		$db = \OMV\Config\Database::getInstance();
+		$result = [["uuid" => "", "description" => gettext("None")]];
+		foreach ($db->getByFilter("conf.system.cron.job", [
+				"operator" => "stringEquals", "arg0" => "type",
+				"arg1" => "userdefined"]) as $job) {
+			$text = $job->get("comment") ?: $job->get("command");
+			if (mb_strlen($text) > 60) {
+				$text = mb_substr($text, 0, 57) . "...";
+			}
+			$result[] = [
+				"uuid" => $job->get("uuid"),
+				"description" => sprintf("%s (%s)", $text,
+					$job->get("username"))
+			];
+		}
+		return $result;
 	}
 }

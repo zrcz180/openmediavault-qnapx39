@@ -1,0 +1,8 @@
+version: "1.0"
+type: navigation-item
+data:
+  path: "system.qnapx39.buttons"
+  text: _("Buttons")
+  position: 40
+  icon: "mdi:gesture-tap-button"
+  url: "/system/qnapx39/buttons"

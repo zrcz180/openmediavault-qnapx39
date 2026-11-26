@@ -634,3 +634,114 @@ class Notifications(unittest.TestCase):
             d.SuperIO.find = real_find
         self.assertEqual(len(sent), 1)
         self.assertIn("stopped unexpectedly", sent[0])
+
+
+class FakeBeeper:
+    def __init__(self):
+        self.events = []
+
+    def beep(self, event, wait=False):
+        self.events.append(event)
+
+
+class ButtonsAndBeeps(unittest.TestCase):
+    def setUp(self):
+        # Set 1 = 0xED on the TS-639 Pro: GP16 and GP17 high (released).
+        self.io = FakeIO([0xED, 0x0F, 0x9F, 0x7B, 0xFD])
+        self.beeper = FakeBeeper()
+        self.ran = []
+        self.result = True
+
+        def runner(task):
+            self.ran.append(task["script"])
+            return self.result
+        self.cfg = {"usbcopy": {"script": "/copy", "user": "root"},
+                    "reset": {"script": "/reset", "user": "root"}}
+        self.led = d.UsbLed(self.io, 0xA20)
+        self.led.BLINK = 0.01
+        self.b = d.Buttons(self.cfg, self.beeper, self.io, 0xA20, self.led,
+                           runner=runner)
+        self.b.DONE_SECONDS = 0
+
+    def press(self, bit, down):
+        v = self.io.ports[0xA20]
+        self.io.ports[0xA20] = v & ~(1 << bit) if down else v | 1 << bit
+
+    def wait(self):
+        for _ in range(200):
+            if self.b.busy.acquire(blocking=False):
+                self.b.busy.release()
+                return
+            d.time.sleep(0.01)
+
+    def test_usbcopy_runs_task_and_lights_led(self):
+        self.press(6, True)
+        self.b.poll(0.0)
+        self.assertEqual(self.ran, [])
+        self.press(6, False)
+        self.b.poll(0.2)
+        self.wait()
+        self.assertEqual(self.ran, ["/copy"])
+        self.assertEqual(self.io.ports[0xA24] & 1, 0)   # USB LED on: done
+        self.assertEqual(self.beeper.events, [])
+
+    def test_usbcopy_failure_beeps(self):
+        self.result = False
+        self.press(6, True)
+        self.b.poll(0.0)
+        self.press(6, False)
+        self.b.poll(0.2)
+        self.wait()
+        self.assertEqual(self.beeper.events, ["usbcopy-failed"])
+        self.assertEqual(self.io.ports[0xA24] & 1, 1)   # USB LED off
+
+    def test_reset_needs_three_to_ten_seconds(self):
+        for held, runs in ((1.0, 0), (3.5, 1), (12.0, 1)):
+            self.press(7, True)
+            self.b.poll(100.0)
+            self.press(7, False)
+            self.b.poll(100.0 + held)
+            self.wait()
+            self.assertEqual(len(self.ran), runs, held)
+        self.assertEqual(self.ran, ["/reset"])
+        self.assertEqual(self.beeper.events, ["reset"])
+
+    def test_no_task_chosen_does_nothing(self):
+        b = d.Buttons({"usbcopy": None, "reset": None}, self.beeper,
+                      self.io, 0xA20, self.led, runner=self.ran.append)
+        self.press(6, True)
+        b.poll(0.0)
+        self.press(6, False)
+        self.assertIsNone(b.handle("usbcopy", False, 1.0))
+        self.assertEqual(self.ran, [])
+
+    def test_alarms(self):
+        a = d.Alarms(self.beeper)
+        a.update([{"failed": False}], "degraded", 0)   # state at start
+        self.assertEqual(self.beeper.events, [])
+        a.update([{"failed": True}], "degraded", 10)
+        a.update([{"failed": True}], "degraded", 100)
+        a.update([{"failed": True}], "rebuilding", 320)
+        self.assertEqual(self.beeper.events,
+                         ["fan-failure", "fan-failure", "storage"])
+
+    def test_storage_state(self):
+        self.assertEqual(d.storage_state(MDSTAT), "rebuilding")
+        self.assertEqual(d.storage_state(
+            "md1 : active raid1 sdb[0]\n  1 blocks [2/1] [U_]\n"),
+            "degraded")
+        self.assertEqual(d.storage_state(""), "ok")
+
+    def test_beeper_tone(self):
+        io = FakeIO([0] * 5)
+        io.ports[0x61] = 0x30
+        beeper = d.Beeper(True, io)
+        beeper.SHORT = beeper.GAP = 0
+        beeper.play("S")
+        self.assertEqual(io.ports[0x61], 0x30)          # speaker off again
+        self.assertEqual(io.ports[0x42], 1193182 // 1000 >> 8)
+
+    def test_task_config(self):
+        c = config(usbcopy={"script": "/x", "user": "rui"}, reset="bad")
+        self.assertEqual(c["usbcopy"], {"script": "/x", "user": "rui"})
+        self.assertIsNone(c["reset"])

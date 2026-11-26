@@ -1,3 +1,14 @@
+openmediavault-qnapx39 (7.4.0) stable; urgency=low
+
+  * System > QNAP > Buttons: USB Copy (GP16) runs a chosen Scheduled
+    Task, with the USB LED blinking while it runs; Reset (GP17) held 3 to
+    10 seconds runs another. Adapted from openmediavault-qnap.
+  * QTS beeps on the PC speaker: start-up, Reset, a stopped fan every
+    5 minutes, a RAID degraded or rebuilding, a failed USB Copy.
+  * QNAP device widget: model, serial number and BIOS from DMI.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 16:40:00 -0000
+
 openmediavault-qnapx39 (7.3.0) stable; urgency=low
 
   * Fault emails through OMV notifications (System > Notification >
