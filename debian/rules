@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+# Salt (omv-salt deploy run qnapx39) enables/starts the daemon, not dpkg.
+override_dh_installsystemd:
+	dh_installsystemd --name=qnapx39d --no-enable --no-start
+
+override_dh_auto_test override_dh_auto_install override_dh_auto_build:

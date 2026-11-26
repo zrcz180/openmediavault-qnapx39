@@ -1,0 +1,8 @@
+version: "1.0"
+type: navigation-item
+data:
+  path: "system.qnapx39.status"
+  text: _("Status")
+  position: 20
+  icon: "mdi:fan"
+  url: "/system/qnapx39/status"

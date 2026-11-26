@@ -1,0 +1,10 @@
+dist/
+__pycache__/
+*.pyc
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
+debian/openmediavault-qnapx39/
+debian/*.debhelper
+debian/*.debhelper.log

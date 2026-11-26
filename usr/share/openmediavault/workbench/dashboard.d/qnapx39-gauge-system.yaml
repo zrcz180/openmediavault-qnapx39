@@ -1,0 +1,27 @@
+version: "1.0"
+type: dashboard-widget
+data:
+  id: b8074023-bc33-5183-ad58-34d815ac1ee8
+  permissions:
+    role:
+      - admin
+  title: _("QNAP board temperature")
+  description: _("Hottest it87 board sensor.")
+  type: chart
+  reloadPeriod: 10000
+  chart:
+    type: gauge
+    maxHeight: "150px"
+    min: 0
+    max: 100
+    displayValue: true
+    request:
+      service: Qnapx39
+      method: getGauges
+    label:
+      formatter: template
+      formatterConfig: "{% if value == value %}{{ value | tofixed(0) }} °C{% else %}No reading{% endif %}"
+    dataConfig:
+      - label: _("Board")
+        prop: system
+        backgroundColor: "#0bb6ff"

@@ -1,0 +1,508 @@
+#!/usr/bin/env python3
+#
+# This file is part of openmediavault-qnapx39.
+#
+# openmediavault-qnapx39 is free software: you can redistribute it and/or
+# modify it under the terms of the GNU General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or any
+# later version.
+#
+# openmediavault-qnapx39 is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with openmediavault-qnapx39. If not, see <http://www.gnu.org/licenses/>.
+#
+# The disk temperature reader is adapted from qnapd in openmediavault-qnap
+# (https://github.com/nader-eloshaiker/omv-qnap-plugin, GPL-3.0-or-later).
+"""Fan control for QNAP TS-x39 NAS (Atom, ITE IT8718F Super I/O).
+
+The fans are driven through the in-kernel it87 hwmon driver. On a TS-639
+Pro pwm1 drives fan1 and pwm2 drives fan2; pwm3 is not connected. The BIOS
+leaves both in manual mode at 50 %, whatever the temperature.
+
+Commands:
+  run        control the fans until stopped (systemd service)
+  failsafe   set every controlled fan to full speed and exit
+  status     print the current readings as JSON
+  collectd   feed temperatures and fan speeds to collectd (exec plugin)
+"""
+
+import argparse
+import glob
+import json
+import logging
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+CONFIG_FILE = "/etc/qnapx39d/qnapx39d.json"
+STATUS_FILE = "/run/qnapx39d/status.json"
+SYSFS = "/sys"
+PWM_MAX = 255
+# Readings outside this range are disconnected or broken sensors.
+PLAUSIBLE_TEMP = (-20.0, 125.0)
+# Any source this far above its full-speed temperature: full speed.
+CRITICAL_MARGIN = 10
+# A fan driven at least this hard that reads 0 RPM this many polls in a row
+# has failed.
+FAN_FAIL_PWM = 100
+FAN_FAIL_POLLS = 3
+# The status file is stale after this many poll intervals.
+STATUS_STALE_POLLS = 3
+
+DEFAULTS = {
+    "enable": False,
+    "interval": 10,
+    "fanmode": "auto",       # auto | manual
+    "manualpwm": 128,
+    "minpwm": 77,            # 30 %
+    "maxpwm": 255,
+    "hysteresis": 3,
+    "usecpu": True, "cpulow": 60, "cpuhigh": 85,
+    "usesystem": True, "syslow": 45, "syshigh": 60,
+    "systemsensors": "temp1,temp2,temp3",
+    "usedisk": True, "disklow": 38, "diskhigh": 50,
+    "diskinterval": 300,
+    "fans": "1,2",           # pwmN drives fanN on the TS-639 Pro
+}
+
+log = logging.getLogger("qnapx39d")
+
+
+# --------------------------------------------------------------------------
+# sysfs helpers
+# --------------------------------------------------------------------------
+
+def sysfs(*parts):
+    return os.path.join(SYSFS, *parts)
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def read_int(path):
+    value = read(path)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def write(path, value):
+    with open(path, "w") as f:
+        f.write(str(value))
+
+
+def find_hwmon(predicate):
+    """First /sys/class/hwmon/hwmonN whose name matches."""
+    for path in sorted(glob.glob(sysfs("class", "hwmon", "hwmon*"))):
+        name = read(os.path.join(path, "name")) or ""
+        if predicate(name):
+            return path
+    return None
+
+
+def plausible(temp):
+    lo, hi = PLAUSIBLE_TEMP
+    return temp is not None and lo <= temp <= hi
+
+
+def millidegrees(path):
+    value = read_int(path)
+    return value / 1000.0 if value is not None else None
+
+
+def parse_list(text, cast=str):
+    return [cast(x.strip()) for x in str(text).split(",") if x.strip()]
+
+
+# --------------------------------------------------------------------------
+# Sensors
+# --------------------------------------------------------------------------
+
+class SuperIO:
+    """The IT8718F (it87 driver): fans, PWM and board temperatures."""
+
+    def __init__(self, path):
+        self.path = path
+        self.name = read(os.path.join(path, "name"))
+
+    @classmethod
+    def find(cls):
+        path = find_hwmon(lambda n: n.startswith("it87"))
+        return cls(path) if path else None
+
+    def temps(self, names):
+        result = []
+        for name in names:
+            temp = millidegrees(os.path.join(self.path, name + "_input"))
+            if plausible(temp):
+                result.append((name, temp))
+        return result
+
+    def rpm(self, n):
+        return read_int(os.path.join(self.path, "fan%d_input" % n))
+
+    def pwm(self, n):
+        return read_int(os.path.join(self.path, "pwm%d" % n))
+
+    def set_pwm(self, n, value):
+        value = min(PWM_MAX, max(0, int(value)))
+        enable = os.path.join(self.path, "pwm%d_enable" % n)
+        if read_int(enable) != 1:
+            write(enable, 1)  # manual mode
+        write(os.path.join(self.path, "pwm%d" % n), value)
+        return self.pwm(n)
+
+
+def cpu_temps():
+    """Core temperatures from coretemp."""
+    path = find_hwmon(lambda n: n == "coretemp")
+    if not path:
+        return []
+    result = []
+    for f in sorted(glob.glob(os.path.join(path, "temp*_input"))):
+        temp = millidegrees(f)
+        if plausible(temp):
+            label = read(f.replace("_input", "_label")) or "cpu"
+            result.append((label, temp))
+    return result
+
+
+class DiskTemps:
+    """SATA disk temperatures via smartctl, cached between polls.
+
+    Disks in standby are never woken (smartctl -n standby). Awake disks
+    with no I/O since their last query keep their last reading, because a
+    S.M.A.R.T. read restarts the standby timer of many drives.
+    """
+
+    IDLE_REFRESH_SECONDS = 1800
+
+    def __init__(self, interval):
+        self.interval = interval
+        self.last = None
+        self.cache = []
+        self.queried = {}   # dev -> (time, I/O count)
+        self.readings = {}  # dev -> (dev, temperature)
+        self.asleep = set()
+
+    def get(self, now):
+        if self.last is None or now - self.last >= self.interval:
+            self.last = now
+            self.cache = self.refresh(now)
+        return self.cache
+
+    @staticmethod
+    def devices():
+        """Internal disks only: USB disks are outside the case airflow."""
+        result = []
+        for path in sorted(glob.glob(sysfs("block", "sd*"))):
+            if read(os.path.join(path, "removable")) == "1":
+                continue
+            if re.search(r"/usb\d+/", os.path.realpath(path)):
+                continue
+            result.append(os.path.basename(path))
+        return result
+
+    def refresh(self, now):
+        result = []
+        for dev in self.devices():
+            ios = io_count(dev)
+            when, last_ios = self.queried.get(dev, (None, None))
+            if ios is not None and ios == last_ios and \
+                    now - when < self.IDLE_REFRESH_SECONDS and \
+                    dev not in self.asleep:
+                if dev in self.readings:
+                    result.append(self.readings[dev])
+                continue
+            self.queried[dev] = (now, ios)
+            self.readings.pop(dev, None)
+            try:
+                proc = subprocess.run(
+                    ["smartctl", "-n", "standby", "-A", "-j", "/dev/" + dev],
+                    capture_output=True, text=True, timeout=20)
+                data = json.loads(proc.stdout or "{}")
+            except (OSError, subprocess.SubprocessError, ValueError):
+                continue
+            temp = parse_smart_temp(data)
+            # smartctl exits with 2 for a disk in standby.
+            if temp is None and proc.returncode == 2:
+                self.asleep.add(dev)
+            else:
+                self.asleep.discard(dev)
+            if plausible(temp):
+                self.readings[dev] = (dev, temp)
+                result.append(self.readings[dev])
+        return result
+
+
+def io_count(dev):
+    """Reads plus writes completed by a block device, or None."""
+    stat = (read(sysfs("block", dev, "stat")) or "").split()
+    return int(stat[0]) + int(stat[4]) if len(stat) >= 5 else None
+
+
+def parse_smart_temp(data):
+    temp = (data.get("temperature") or {}).get("current")
+    return float(temp) if isinstance(temp, (int, float)) else None
+
+
+# --------------------------------------------------------------------------
+# Fan curve
+# --------------------------------------------------------------------------
+
+def curve(temp, low, high, minpwm, maxpwm):
+    """Linear from minpwm at `low` to maxpwm at `high`."""
+    if temp <= low:
+        return minpwm
+    if temp >= high:
+        return maxpwm
+    return round(minpwm + (maxpwm - minpwm) * (temp - low) / (high - low))
+
+
+def sources(config, cpu, system, disks):
+    """[(source, hottest temperature, low, high)] for the enabled sources
+    that have a reading."""
+    result = []
+    for key, readings in (("cpu", cpu), ("sys", system), ("disk", disks)):
+        use = {"cpu": "usecpu", "sys": "usesystem", "disk": "usedisk"}[key]
+        temps = [t for _, t in readings]
+        if config[use] and temps:
+            result.append((key, max(temps), config[key + "low"],
+                           config[key + "high"]))
+    return result
+
+
+def target_pwm(config, srcs, current):
+    """PWM for this poll. Rises at once; falls only once every source is
+    `hysteresis` degrees below the point that asked for the current speed.
+    No readings at all: full speed."""
+    if config["fanmode"] == "manual":
+        return config["manualpwm"]
+    if not srcs:
+        return PWM_MAX
+    if any(t >= high + CRITICAL_MARGIN for _, t, _, high in srcs):
+        return PWM_MAX
+    lo, hi = config["minpwm"], config["maxpwm"]
+    wanted = max(curve(t, low, high, lo, hi) for _, t, low, high in srcs)
+    if current is None or wanted >= current:
+        return wanted
+    hyst = config["hysteresis"]
+    held = max(curve(t + hyst, low, high, lo, hi)
+               for _, t, low, high in srcs)
+    return max(wanted, min(current, held))
+
+
+# --------------------------------------------------------------------------
+# Daemon
+# --------------------------------------------------------------------------
+
+def load_config(path=None):
+    path = path or CONFIG_FILE
+    config = dict(DEFAULTS)
+    try:
+        with open(path) as f:
+            config.update(json.load(f))
+    except (OSError, ValueError) as e:
+        log.warning("Using defaults, cannot read %s: %s", path, e)
+    for key in ("interval", "manualpwm", "minpwm", "maxpwm", "hysteresis",
+                "cpulow", "cpuhigh", "syslow", "syshigh", "disklow",
+                "diskhigh", "diskinterval"):
+        config[key] = int(config[key])
+    for key in ("enable", "usecpu", "usesystem", "usedisk"):
+        config[key] = bool(config[key])
+    config["fans"] = parse_list(config["fans"], int)
+    config["systemsensors"] = parse_list(config["systemsensors"])
+    return config
+
+
+def write_status(status, path=None):
+    path = path or STATUS_FILE
+    tmp = path + ".tmp"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(tmp, "w") as f:
+        json.dump(status, f)
+    os.replace(tmp, path)
+
+
+def failsafe(config):
+    sio = SuperIO.find()
+    if not sio:
+        log.error("No it87 sensor chip found: is the it87 module loaded?")
+        return 1
+    for n in config["fans"]:
+        try:
+            sio.set_pwm(n, PWM_MAX)
+        except OSError as e:
+            log.error("Failed to set pwm%d to full speed: %s", n, e)
+    return 0
+
+
+class Stop(Exception):
+    pass
+
+
+def run(config):
+    def stop(signum, frame):
+        raise Stop()
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
+    sio = SuperIO.find()
+    if not sio:
+        log.error("No it87 sensor chip found: is the it87 module loaded?")
+        return 1
+    log.info("Using %s at %s, fans %s", sio.name, sio.path, config["fans"])
+    disks = DiskTemps(config["diskinterval"])
+    current = None
+    zero_rpm = {n: 0 for n in config["fans"]}
+    try:
+        while True:
+            now = time.time()
+            cpu = cpu_temps()
+            system = sio.temps(config["systemsensors"])
+            disk = disks.get(now) if config["usedisk"] else []
+            srcs = sources(config, cpu, system, disk)
+            pwm = target_pwm(config, srcs, current)
+            fans = []
+            for n in config["fans"]:
+                try:
+                    actual = sio.set_pwm(n, pwm)
+                except OSError as e:
+                    log.error("Failed to set pwm%d: %s", n, e)
+                    actual = None
+                if actual is not None and abs(actual - pwm) > 2:
+                    log.warning("pwm%d reads back %s, wanted %s",
+                                n, actual, pwm)
+                rpm = sio.rpm(n)
+                zero_rpm[n] = zero_rpm[n] + 1 \
+                    if (rpm == 0 and pwm >= FAN_FAIL_PWM) else 0
+                if zero_rpm[n] == FAN_FAIL_POLLS:
+                    log.error("Fan %d reads 0 RPM at PWM %d: fan failed?",
+                              n, pwm)
+                fans.append({"name": "fan%d" % n, "rpm": rpm, "pwm": actual,
+                             "failed": zero_rpm[n] >= FAN_FAIL_POLLS})
+            if current != pwm:
+                log.info("Fan PWM %s -> %d (%s)", current, pwm,
+                         ", ".join("%s %.0f°C" % (s, t)
+                                   for s, t, _, _ in srcs) or "no readings")
+            current = pwm
+            write_status({
+                "time": now, "interval": config["interval"],
+                "pwm": pwm, "duty": round(pwm * 100 / PWM_MAX),
+                "fans": fans,
+                "temps": {"cpu": cpu, "system": system, "disk": disk},
+            })
+            time.sleep(config["interval"])
+    except Stop:
+        log.info("Stopping")
+    finally:
+        failsafe(config)
+    return 0
+
+
+# --------------------------------------------------------------------------
+# status / collectd
+# --------------------------------------------------------------------------
+
+def read_status(path=None):
+    """The daemon's last status, or None when missing or stale."""
+    path = path or STATUS_FILE
+    try:
+        with open(path) as f:
+            status = json.load(f)
+    except (OSError, ValueError):
+        return None
+    age = time.time() - status.get("time", 0)
+    if age > STATUS_STALE_POLLS * max(2, status.get("interval", 10)):
+        return None
+    return status
+
+
+def live_status(config):
+    """Readings without the daemon (disks are not queried, so none wake)."""
+    sio = SuperIO.find()
+    fans = []
+    system = []
+    if sio:
+        system = sio.temps(config["systemsensors"])
+        fans = [{"name": "fan%d" % n, "rpm": sio.rpm(n), "pwm": sio.pwm(n),
+                 "failed": False} for n in config["fans"]]
+    return {"time": time.time(), "running": False, "pwm": None,
+            "duty": None, "fans": fans,
+            "temps": {"cpu": cpu_temps(), "system": system, "disk": []}}
+
+
+def status(config):
+    result = read_status()
+    if result is None:
+        result = live_status(config)
+    else:
+        result["running"] = True
+    return result
+
+
+def collectd_values(st):
+    """[(type-instance, value)]: hottest temperature per source, every fan
+    speed and the duty."""
+    values = []
+    for source, readings in sorted((st.get("temps") or {}).items()):
+        temps = [t for _, t in readings]
+        if temps:
+            values.append(("temperature-" + source, max(temps)))
+    for fan in st.get("fans") or []:
+        if fan.get("rpm") is not None:
+            values.append(("fanspeed-" + fan["name"], fan["rpm"]))
+    if st.get("duty") is not None:
+        values.append(("percent-duty", st["duty"]))
+    return values
+
+
+def collectd():
+    host = os.environ.get("COLLECTD_HOSTNAME", "localhost")
+    interval = int(float(os.environ.get("COLLECTD_INTERVAL", "60")))
+    try:
+        while True:
+            st = read_status()
+            for ident, value in collectd_values(st or {}):
+                print('PUTVAL "%s/exec-qnapx39/%s" interval=%d N:%s' %
+                      (host, ident, interval, value), flush=True)
+            time.sleep(interval)
+    except (BrokenPipeError, KeyboardInterrupt):
+        return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("command",
+                        choices=["run", "failsafe", "status", "collectd"])
+    parser.add_argument("--config", default=CONFIG_FILE)
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO,
+                        format="%(levelname)s: %(message)s")
+    if args.command == "collectd":
+        return collectd()
+    config = load_config(args.config)
+    if args.command == "run":
+        return run(config)
+    if args.command == "failsafe":
+        return failsafe(config)
+    print(json.dumps(status(config), indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

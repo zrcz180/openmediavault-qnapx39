@@ -1,0 +1,27 @@
+version: "1.0"
+type: dashboard-widget
+data:
+  id: 1f17f38c-dc4d-5e94-9ae8-ea9dbe6040c2
+  permissions:
+    role:
+      - admin
+  title: _("QNAP fan power")
+  description: _("Fan power set by the plugin.")
+  type: chart
+  reloadPeriod: 10000
+  chart:
+    type: gauge
+    maxHeight: "150px"
+    min: 0
+    max: 100
+    displayValue: true
+    request:
+      service: Qnapx39
+      method: getGauges
+    label:
+      formatter: template
+      formatterConfig: "{% if value == value %}{{ value | tofixed(0) }} %{% else %}No reading{% endif %}"
+    dataConfig:
+      - label: _("Fans")
+        prop: duty
+        backgroundColor: "#ff1300"

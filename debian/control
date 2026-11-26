@@ -1,0 +1,22 @@
+Source: openmediavault-qnapx39
+Section: admin
+XB-Plugin-Section: utilities
+Priority: optional
+Maintainer: Rui <zrcz180@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/zrcz180/openmediavault-qnapx39
+Rules-Requires-Root: no
+
+Package: openmediavault-qnapx39
+Architecture: all
+Depends: openmediavault (>= 7), openmediavault (<< 8),
+         python3 (>= 3.9),
+         smartmontools,
+         ${misc:Depends}
+Description: OpenMediaVault fan control for QNAP TS-x39 NAS
+ Temperature-driven fan control for older Intel Atom QNAP NAS models
+ with an ITE IT8718F Super I/O (e.g. TS-639 Pro), using the in-kernel
+ it87 driver. Works on i386 and amd64.
+ .
+ Status page, dashboard gauges and performance graphs included.
