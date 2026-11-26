@@ -12,6 +12,8 @@ loader = importlib.machinery.SourceFileLoader("qnapx39d", PATH)
 spec = importlib.util.spec_from_loader("qnapx39d", loader)
 d = importlib.util.module_from_spec(spec)
 loader.exec_module(d)
+# Never touch real I/O ports from the tests.
+d.PORT_DEVICE = "/nonexistent/port"
 
 
 def config(**kw):
@@ -93,7 +95,7 @@ class FakeSysfs(unittest.TestCase):
 
         real_sleep, d.time.sleep = d.time.sleep, sleep
         try:
-            d.run(config(usedisk=False))
+            d.run(config(usedisk=False, leds=False))
         finally:
             d.time.sleep = real_sleep
         # Board at 40 C is below 45 C and CPU 28 C: lowest speed.
@@ -154,6 +156,83 @@ class Curve(unittest.TestCase):
         c = config(fans="1, 2", systemsensors="temp1,temp3")
         self.assertEqual(c["fans"], [1, 2])
         self.assertEqual(c["systemsensors"], ["temp1", "temp3"])
+
+
+class FakeIO:
+    """I/O ports: Simple I/O sets at 0xA20.. and a config space."""
+
+    def __init__(self, values):
+        self.ports = {0xA20 + i: v for i, v in enumerate(values)}
+        self.config = {}
+        self.index = None
+
+    def outb(self, addr, value):
+        if addr == 0x2E:
+            self.index = value
+        elif addr == 0x2F:
+            self.config[self.index] = value
+        else:
+            self.ports[addr] = value
+
+    def inb(self, addr):
+        if addr == 0x2F:
+            return self.config.get(self.index, 0)
+        return self.ports[addr]
+
+
+class Leds(unittest.TestCase):
+    # Values from the TS-639 Pro dump: set 2 = 0x0F, set 3 = 0x9F.
+    def setUp(self):
+        self.io = FakeIO([0xED, 0x0F, 0x9F, 0x7B, 0xFD])
+        self.cfg = d.SuperIOConfig(self.io)
+        # BIOS blinks GP35 (location 0x1D) on blink generator 1.
+        self.panel = d.FrontPanel(self.io, 0xA20, [0x1D, 0], self.cfg)
+
+    def pin(self, s, bit):
+        return self.io.ports[0xA20 + s - 1] >> bit & 1
+
+    def test_all_well_is_green_and_stops_blinking(self):
+        self.panel.show(True, set())
+        self.assertEqual(self.pin(3, 5), 0)   # green on (active-low)
+        self.assertEqual(self.pin(3, 4), 1)   # red off
+        self.assertEqual(self.io.config[0xF8], 0)
+        self.assertEqual(self.io.ports[0xA21] & 0x0F, 0x0F)  # disks 1-4 off
+
+    def test_problem_is_red_and_failed_bay_lights(self):
+        self.panel.show(False, {1, 6})
+        self.assertEqual(self.pin(3, 5), 1)
+        self.assertEqual(self.pin(3, 4), 0)
+        self.assertEqual(self.pin(2, 3), 0)   # bay 1 = GP23
+        self.assertEqual(self.pin(3, 0), 0)   # bay 6 = GP30
+        self.assertEqual(self.pin(2, 2), 1)
+
+    def test_other_pins_untouched_and_restore(self):
+        self.panel.show(False, {1, 2, 3, 4, 5, 6})
+        self.assertEqual(self.io.ports[0xA22] & 0x0C, 0x9F & 0x0C)  # GP32/33
+        self.assertEqual(self.io.ports[0xA20], 0xED)
+        self.panel.restore()
+        self.assertEqual(self.io.ports[0xA21], 0x0F)
+        self.assertEqual(self.io.ports[0xA22], 0x9F)
+        self.assertEqual(self.io.config[0xF8], 0x1D)
+
+    def test_panel_state(self):
+        class Disks:
+            failed = {"sdb"}
+        mdstat = "md0 : active raid5 sdc1[2](F) sdb1[1] sda1[0]\n" \
+                 "      5860 blocks [3/2] [UU_]\n"
+        ok, bays, problems = d.panel_state(
+            [{"name": "fan1", "failed": False}], Disks(), mdstat,
+            {1: "sda", 2: "sdb", 3: "sdc"})
+        self.assertFalse(ok)
+        self.assertEqual(bays, {2, 3})
+        self.assertIn("RAID degraded", problems)
+        ok, bays, problems = d.panel_state([], type("D", (), {"failed": set()}),
+                                           "md0 : active raid1 [2/2] [UU]", {})
+        self.assertTrue(ok)
+
+    def test_smart_health(self):
+        self.assertFalse(d.parse_smart_health({"smart_status": {"passed": False}}))
+        self.assertIsNone(d.parse_smart_health({}))
 
 
 class Collectd(unittest.TestCase):

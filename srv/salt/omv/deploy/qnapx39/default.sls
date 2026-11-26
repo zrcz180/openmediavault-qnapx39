@@ -58,6 +58,8 @@ configure_qnapx39d:
         diskhigh: {{ config.diskhigh }}
         diskinterval: {{ config.diskinterval }}
         fans: {{ config.fans | json }}
+        leds: {{ config.leds | to_bool | json }}
+        bays: {{ config.bays | json }}
     - serializer: json
     - makedirs: True
     - user: root

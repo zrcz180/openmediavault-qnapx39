@@ -23,6 +23,11 @@ The fans are driven through the in-kernel it87 hwmon driver. On a TS-639
 Pro pwm1 drives fan1 and pwm2 drives fan2; pwm3 is not connected. The BIOS
 leaves both in manual mode at 50 %, whatever the temperature.
 
+The front panel LEDs are IT8718F GPIO pins, written through the chip's
+Simple I/O ports (mapped on a TS-639 Pro, all active-low): the Status LED
+is green when all is well and red on a failed fan, a failed disk or a
+degraded RAID; a disk's red LED lights when that disk fails.
+
 Commands:
   run        control the fans until stopped (systemd service)
   failsafe   set every controlled fan to full speed and exit
@@ -43,6 +48,8 @@ import time
 
 CONFIG_FILE = "/etc/qnapx39d/qnapx39d.json"
 STATUS_FILE = "/run/qnapx39d/status.json"
+PORT_DEVICE = "/dev/port"
+MDSTAT_FILE = "/proc/mdstat"
 SYSFS = "/sys"
 PWM_MAX = 255
 # Readings outside this range are disconnected or broken sensors.
@@ -70,6 +77,9 @@ DEFAULTS = {
     "usedisk": True, "disklow": 38, "diskhigh": 50,
     "diskinterval": 300,
     "fans": "1,2",           # pwmN drives fanN on the TS-639 Pro
+    "leds": True,
+    # Bay N holds the disk on the Nth ATA port listed here.
+    "bays": "ata1,ata2,ata3,ata4,ata5,ata6",
 }
 
 log = logging.getLogger("qnapx39d")
@@ -197,6 +207,9 @@ class DiskTemps:
         self.queried = {}   # dev -> (time, I/O count)
         self.readings = {}  # dev -> (dev, temperature)
         self.asleep = set()
+        # Disks whose last S.M.A.R.T. health check failed. Disks in standby
+        # keep their previous verdict.
+        self.failed = set()
 
     def get(self, now):
         if self.last is None or now - self.last >= self.interval:
@@ -231,7 +244,8 @@ class DiskTemps:
             self.readings.pop(dev, None)
             try:
                 proc = subprocess.run(
-                    ["smartctl", "-n", "standby", "-A", "-j", "/dev/" + dev],
+                    ["smartctl", "-n", "standby", "-A", "-H", "-j",
+                     "/dev/" + dev],
                     capture_output=True, text=True, timeout=20)
                 data = json.loads(proc.stdout or "{}")
             except (OSError, subprocess.SubprocessError, ValueError):
@@ -245,6 +259,11 @@ class DiskTemps:
             if plausible(temp):
                 self.readings[dev] = (dev, temp)
                 result.append(self.readings[dev])
+            passed = parse_smart_health(data)
+            if passed is False:
+                self.failed.add(dev)
+            elif passed is True:
+                self.failed.discard(dev)
         return result
 
 
@@ -257,6 +276,182 @@ def io_count(dev):
 def parse_smart_temp(data):
     temp = (data.get("temperature") or {}).get("current")
     return float(temp) if isinstance(temp, (int, float)) else None
+
+
+def parse_smart_health(data):
+    """True/False from smartctl -H -j, None when not reported."""
+    passed = (data.get("smart_status") or {}).get("passed")
+    return passed if isinstance(passed, bool) else None
+
+
+def disk_name(path):
+    """sda for /dev/sda1 or sda1."""
+    match = re.match(r"([a-z]+?d[a-z]+)", os.path.basename(path))
+    return match.group(1) if match else None
+
+
+def md_faulty(text):
+    """Disks marked faulty (F) in /proc/mdstat."""
+    return {disk_name(m) for m in re.findall(r"(\w+)\[\d+\]\(F\)", text)
+            if disk_name(m)}
+
+
+def md_degraded(text):
+    """True when an md array misses a member ([UU_] style status)."""
+    return any("_" in m for m in re.findall(r"\[([U_]+)\]", text))
+
+
+def disk_bays(ports):
+    """{bay number: disk} from the ATA port of each disk's sysfs path."""
+    result = {}
+    for path in sorted(glob.glob(sysfs("block", "sd*"))):
+        real = os.path.realpath(path)
+        for bay, port in enumerate(ports, 1):
+            if "/%s/" % port in real:
+                result[bay] = os.path.basename(path)
+    return result
+
+
+# --------------------------------------------------------------------------
+# Front panel LEDs (IT8718F GPIO)
+# --------------------------------------------------------------------------
+
+class PortIO:
+    """Byte access to x86 I/O ports through /dev/port."""
+
+    def __init__(self):
+        self.fd = os.open(PORT_DEVICE, os.O_RDWR)
+
+    def outb(self, addr, value):
+        os.lseek(self.fd, addr, os.SEEK_SET)
+        os.write(self.fd, bytes([value]))
+
+    def inb(self, addr):
+        os.lseek(self.fd, addr, os.SEEK_SET)
+        return os.read(self.fd, 1)[0]
+
+
+class SuperIOConfig:
+    """IT8718F configuration space (index/data ports 0x2E/0x2F)."""
+
+    INDEX = 0x2E
+    KEY = bytes([0x87, 0x01, 0x55, 0x55])
+    LDN_GPIO = 0x07
+
+    def __init__(self, io):
+        self.io = io
+
+    def __enter__(self):
+        for b in self.KEY:
+            self.io.outb(self.INDEX, b)
+        return self
+
+    def __exit__(self, *exc):
+        self.io.outb(self.INDEX, 0x02)
+        self.io.outb(self.INDEX + 1, 0x02)
+
+    def reg(self, r, value=None):
+        self.io.outb(self.INDEX, r)
+        if value is None:
+            return self.io.inb(self.INDEX + 1)
+        self.io.outb(self.INDEX + 1, value)
+        return value
+
+    def gpio(self):
+        """(chip id, Simple I/O base, [blink pin location registers])."""
+        chip = self.reg(0x20) << 8 | self.reg(0x21)
+        self.reg(0x07, self.LDN_GPIO)
+        base = self.reg(0x62) << 8 | self.reg(0x63)
+        return chip, base, [self.reg(0xF8), self.reg(0xFA)]
+
+
+class FrontPanel:
+    """TS-639 Pro front panel. Pins are (GPIO set, bit), all active-low,
+    mapped by flipping each pin on a TS-639 Pro."""
+
+    STATUS_GREEN = (3, 5)   # GP35
+    STATUS_RED = (3, 4)     # GP34
+    DISK_RED = {1: (2, 3), 2: (2, 2), 3: (2, 1), 4: (2, 0),
+                5: (3, 1), 6: (3, 0)}
+
+    def __init__(self, io, base, blink, config=None):
+        self.io = io
+        self.base = base
+        self.config = config  # SuperIOConfig, to stop hardware blinking
+        self.blink = list(blink)
+        pins = [self.STATUS_GREEN, self.STATUS_RED] + \
+            list(self.DISK_RED.values())
+        self.original = {s: self.io.inb(base + s - 1)
+                         for s in {s for s, _ in pins}}
+        self.mask = {}
+        for s, bit in pins:
+            self.mask[s] = self.mask.get(s, 0) | 1 << bit
+
+    @classmethod
+    def open(cls):
+        io = PortIO()
+        config = SuperIOConfig(io)
+        with config:
+            chip, base, blink = config.gpio()
+        if chip != 0x8718 or not base:
+            raise OSError("no IT8718F GPIO (chip 0x%04X, base 0x%04X)"
+                          % (chip, base))
+        return cls(io, base, blink, config)
+
+    @staticmethod
+    def location(pin):
+        s, bit = pin
+        return s << 3 | bit
+
+    def set(self, pin, on):
+        s, bit = pin
+        addr = self.base + s - 1
+        value = self.io.inb(addr)
+        value = value & ~(1 << bit) if on else value | 1 << bit
+        self.io.outb(addr, value)
+
+    def stop_blink(self, pin):
+        """The BIOS blinks the green Status LED in hardware ("booting");
+        unmap it from the blink generator so it can stay on."""
+        for n, loc in enumerate(self.blink):
+            if loc == self.location(pin) and self.config:
+                with self.config:
+                    self.config.reg(0x07, SuperIOConfig.LDN_GPIO)
+                    self.config.reg(0xF8 + 2 * n, 0)
+
+    def show(self, ok, failed_bays):
+        self.stop_blink(self.STATUS_GREEN)
+        self.set(self.STATUS_GREEN, ok)
+        self.set(self.STATUS_RED, not ok)
+        for bay, pin in self.DISK_RED.items():
+            self.set(pin, bay in failed_bays)
+
+    def restore(self):
+        """Put our pins and the blink mapping back as the BIOS left them."""
+        for s, orig in self.original.items():
+            addr = self.base + s - 1
+            value = self.io.inb(addr)
+            self.io.outb(addr, value & ~self.mask[s] | orig & self.mask[s])
+        if self.config:
+            with self.config:
+                self.config.reg(0x07, SuperIOConfig.LDN_GPIO)
+                for n, loc in enumerate(self.blink):
+                    self.config.reg(0xF8 + 2 * n, loc)
+
+
+def panel_state(fans, disks, mdstat, bays):
+    """(all well, {failed bay numbers}, [problems])."""
+    problems = []
+    faulty = set(disks.failed) | md_faulty(mdstat)
+    failed_bays = {bay for bay, dev in bays.items() if dev in faulty}
+    for fan in fans:
+        if fan.get("failed"):
+            problems.append("%s failed" % fan["name"])
+    for dev in sorted(faulty):
+        problems.append("disk %s failed" % dev)
+    if md_degraded(mdstat):
+        problems.append("RAID degraded")
+    return not problems, failed_bays, problems
 
 
 # --------------------------------------------------------------------------
@@ -321,10 +516,11 @@ def load_config(path=None):
                 "cpulow", "cpuhigh", "syslow", "syshigh", "disklow",
                 "diskhigh", "diskinterval"):
         config[key] = int(config[key])
-    for key in ("enable", "usecpu", "usesystem", "usedisk"):
+    for key in ("enable", "usecpu", "usesystem", "usedisk", "leds"):
         config[key] = bool(config[key])
     config["fans"] = parse_list(config["fans"], int)
     config["systemsensors"] = parse_list(config["systemsensors"])
+    config["bays"] = parse_list(config["bays"])
     return config
 
 
@@ -366,16 +562,26 @@ def run(config):
         log.error("No it87 sensor chip found: is the it87 module loaded?")
         return 1
     log.info("Using %s at %s, fans %s", sio.name, sio.path, config["fans"])
+    panel = None
+    if config["leds"]:
+        try:
+            panel = FrontPanel.open()
+        except OSError as e:
+            log.warning("Front panel LEDs disabled: %s", e)
     disks = DiskTemps(config["diskinterval"])
     current = None
     zero_rpm = {n: 0 for n in config["fans"]}
+    problems_before = None
     try:
         while True:
             now = time.time()
             cpu = cpu_temps()
             system = sio.temps(config["systemsensors"])
-            disk = disks.get(now) if config["usedisk"] else []
-            srcs = sources(config, cpu, system, disk)
+            # Disks are read for the LEDs too (health), even when their
+            # temperatures do not drive the fans.
+            disk = disks.get(now) if (config["usedisk"] or panel) else []
+            srcs = sources(config, cpu, system,
+                           disk if config["usedisk"] else [])
             pwm = target_pwm(config, srcs, current)
             fans = []
             for n in config["fans"]:
@@ -400,17 +606,36 @@ def run(config):
                          ", ".join("%s %.0f°C" % (s, t)
                                    for s, t, _, _ in srcs) or "no readings")
             current = pwm
+            ok, failed_bays, problems = panel_state(
+                fans, disks, read(MDSTAT_FILE) or "", disk_bays(config["bays"]))
+            if problems != problems_before:
+                if problems:
+                    log.warning("Status red: %s", "; ".join(problems))
+                elif problems_before is not None:
+                    log.info("Status green: all well again")
+                problems_before = problems
+            if panel:
+                try:
+                    panel.show(ok, failed_bays)
+                except OSError as e:
+                    log.error("Failed to set the LEDs: %s", e)
             write_status({
                 "time": now, "interval": config["interval"],
                 "pwm": pwm, "duty": round(pwm * 100 / PWM_MAX),
                 "fans": fans,
                 "temps": {"cpu": cpu, "system": system, "disk": disk},
+                "problems": problems,
             })
             time.sleep(config["interval"])
     except Stop:
         log.info("Stopping")
     finally:
         failsafe(config)
+        if panel:
+            try:
+                panel.restore()
+            except OSError as e:
+                log.error("Failed to restore the LEDs: %s", e)
     return 0
 
 
