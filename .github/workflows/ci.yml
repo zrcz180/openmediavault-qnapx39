@@ -8,21 +8,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Test and build inside Debian 12 i386, the NAS's own system. Host
-      # networking: as a job container, i386/debian:bookworm could not
-      # resolve deb.debian.org on the runner.
-      - name: Test and build on Debian 12 i386
+      # Debian 12 (OMV 7) ships Python 3.11. The package is
+      # Architecture: all, so building on the runner gives the same .deb.
+      # (An i386/debian:bookworm container could not resolve
+      # deb.debian.org on the runner, with or without host networking.)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test
+        run: python -m unittest discover -s tests -v
+      - name: Build
         run: |
-          mkdir -p dist
-          docker run --rm --network host --platform linux/386 \
-            -v "$PWD":/src:ro -v "$PWD/dist":/dist i386/debian:bookworm sh -ec '
-              apt-get update -qq
-              apt-get install -y -qq --no-install-recommends build-essential debhelper fakeroot python3 >/dev/null
-              cp -r /src /build && cd /build
-              python3 -m unittest discover -s tests -v
-              dpkg-buildpackage -us -uc -b
-              cp ../*.deb /dist/'
-          ls -l dist
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends debhelper fakeroot
+          dpkg-buildpackage -us -uc -b
+          mkdir -p dist && cp ../*.deb dist/
       - uses: actions/upload-artifact@v4
         with:
           name: deb
