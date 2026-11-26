@@ -26,11 +26,15 @@ data:
       - type: select
         name: fanmode
         label: _("Fan mode")
-        value: auto
+        value: normal
         store:
           data:
-            - ["auto", _("Follow the temperatures")]
+            - ["quiet", _("Quiet (slower fans, runs a little warmer)")]
+            - ["normal", _("Normal (recommended)")]
+            - ["performance", _("Performance (cooler, louder)")]
+            - ["auto", _("Custom (set your own temperatures)")]
             - ["manual", _("Fixed speed")]
+        hint: _("Whatever the mode, the fans always go to full speed if something gets dangerously hot.")
       - type: numberInput
         name: manualspeed
         label: _("Fixed fan speed (%)")
@@ -108,10 +112,10 @@ data:
         modifiers:
           - type: visible
             constraint:
-              operator: eq
+              operator: ne
               arg0:
                 prop: fanmode
-              arg1: auto
+              arg1: manual
       - type: divider
         title: _("What the fans react to")
       - type: checkbox
@@ -248,61 +252,6 @@ data:
         validators:
           required: true
           pattern: "^[1-3](,[1-3])*$"
-      - type: divider
-        title: _("Front panel")
-      - type: checkbox
-        name: leds
-        label: _("Control the front panel LEDs")
-        value: true
-        hint: _("Status turns solid green when all is well and red on a failed fan, a failed disk or a degraded RAID. A failed disk's red LED lights up, and USB is blue while a USB disk is plugged in. When the service stops, the LEDs go back to how the BIOS left them.")
-      - type: textInput
-        name: bays
-        label: _("SATA port of each bay")
-        value: "pci-0000:00:1f.1-ata-1,pci-0000:03:00.0-ata-2,pci-0000:03:00.0-ata-3,pci-0000:03:00.0-ata-4,pci-0000:04:00.0-ata-1,pci-0000:04:00.0-ata-2"
-        hint: _("Bay 1 first, as named in /dev/disk/by-path (for example pci-0000:03:00.0-ata-1). Kernel ataN names also work but can change after a reboot.")
-        validators:
-          required: true
-          pattern: "^((ata[0-9]+|pci-[0-9a-f:.]+-ata-[0-9]+)(,|$)){1,6}$"
-        modifiers:
-          - type: visible
-            constraint:
-              operator: truthy
-              arg0:
-                prop: leds
-      - type: divider
-        title: _("Front LCD")
-      - type: checkbox
-        name: lcd
-        label: _("Show status on the front LCD")
-        value: true
-        hint: _("IP address of each network port, status, temperatures, fans, each disk bay, RAID arrays, volumes and uptime. SELECT shows the next page and ENTER the previous one. Stop any other program that uses /dev/ttyS1 first.")
-      - type: numberInput
-        name: lcdtimeout
-        label: _("Backlight off after")
-        value: 60
-        hint: _("Seconds without a button press. 0 keeps the backlight always on. A new problem turns it back on.")
-        validators:
-          required: true
-          min: 0
-          max: 3600
-          patternType: integer
-        modifiers:
-          - type: visible
-            constraint:
-              operator: truthy
-              arg0:
-                prop: lcd
-      - type: checkbox
-        name: lcdpower
-        label: _("Allow reboot and shutdown from the LCD")
-        value: true
-        hint: _("On the last page, ENTER opens a menu. SELECT picks Reboot or Shut down, ENTER chooses and a second ENTER confirms.")
-        modifiers:
-          - type: visible
-            constraint:
-              operator: truthy
-              arg0:
-                prop: lcd
     buttons:
       - template: submit
       - template: cancel

@@ -80,7 +80,9 @@ SIOCGIFADDR = 0x8915
 DEFAULTS = {
     "enable": False,
     "interval": 10,
-    "fanmode": "auto",       # auto | manual
+    # quiet | normal | performance: presets; auto: the temperatures
+    # below (Custom); manual: manualpwm.
+    "fanmode": "auto",
     "manualpwm": 128,
     "minpwm": 77,            # 30 %
     "maxpwm": 255,
@@ -101,6 +103,14 @@ DEFAULTS = {
     "lcdport": "/dev/ttyS1",
     "lcdtimeout": 60,        # backlight off after this many seconds, 0 never
     "lcdpower": True,        # Shutdown/Reboot menu on the LCD
+    "statusled": True,       # drive the Status LED (else leave it to BIOS)
+    "volumefull": 95,        # % used that counts as a full volume
+    "night": False,          # Status green and LCD light off at night
+    "nightstart": "22:00",
+    "nightend": "07:00",
+    # After a power cut: "on" starts the NAS when power returns, "off"
+    # keeps it off, "bios" leaves the BIOS setting alone.
+    "powerloss": "bios",
     # Set by Salt: OMV email on and the "QNAP TS-x39 hardware" event ticked.
     "notify": False,
     "beep": False,           # QTS beeps on the PC speaker
@@ -506,14 +516,19 @@ class FrontPanel:
                     self.config.reg(0xF8 + 2 * n, 0)
                 self.unmapped[n] = True
 
-    def show(self, ok, failed_bays, usb=False):
-        self.stop_blink(self.STATUS_BLINK)
-        self.set(self.STATUS_GREEN, ok)
-        self.set(self.STATUS_RED, not ok)
-        if not self.usb_busy:   # USB Copy drives the USB LED meanwhile
-            self.set(self.USB, usb)
-        for bay, pin in self.DISK_RED.items():
-            self.set(pin, bay in failed_bays)
+    def show(self, ok, failed_bays, usb=False, status=True, disks=True,
+             night=False):
+        """status / disks: drive those LEDs at all (else the BIOS state
+        stays). At night the green Status LED is off; red still shows."""
+        if status:
+            self.stop_blink(self.STATUS_BLINK)
+            self.set(self.STATUS_GREEN, ok and not night)
+            self.set(self.STATUS_RED, not ok)
+        if disks:
+            if not self.usb_busy:   # USB Copy drives the USB LED meanwhile
+                self.set(self.USB, usb and not night)
+            for bay, pin in self.DISK_RED.items():
+                self.set(pin, bay in failed_bays)
 
     def restore(self):
         """Put our pins and the blink mapping back as the BIOS left them."""
@@ -913,6 +928,7 @@ class LcdPanel:
         self.menu = None      # index in MENU while the menu is open
         self.sure = False     # asking for confirmation
         self.farewell = None  # last message, once a power action started
+        self.night = False
         self.stopping = False
 
     def pages(self):
@@ -989,8 +1005,11 @@ class LcdPanel:
         idle = now - self.touched
         if self.menu is not None and idle > self.MENU_TIMEOUT:
             self.menu, self.sure = None, False
-        self.lcd.backlight(bool(self.farewell) or not self.timeout or
-                           idle < self.timeout)
+        if self.night:   # only after a press or a new problem
+            lit = idle < (self.timeout or 60)
+        else:
+            lit = not self.timeout or idle < self.timeout
+        self.lcd.backlight(bool(self.farewell) or lit)
         self.lcd.show(self.screen())
 
     def loop(self):
@@ -1047,6 +1066,33 @@ def sources(config, cpu, system, disks):
     return result
 
 
+# Fan modes like QTS Smart Fan, tuned for the TS-639 Pro (its board
+# sensors idle near 40 C): (low, high) per source and the PWM range.
+PRESETS = {
+    "quiet": {"cpulow": 65, "cpuhigh": 90, "syslow": 48, "syshigh": 63,
+              "disklow": 40, "diskhigh": 52, "minpwm": 64, "maxpwm": 200},
+    "normal": {"cpulow": 60, "cpuhigh": 85, "syslow": 45, "syshigh": 60,
+               "disklow": 38, "diskhigh": 50, "minpwm": 77, "maxpwm": 255},
+    "performance": {"cpulow": 55, "cpuhigh": 80, "syslow": 42,
+                    "syshigh": 55, "disklow": 35, "diskhigh": 45,
+                    "minpwm": 100, "maxpwm": 255},
+}
+
+
+def is_night(now, start, end):
+    """True when the local time `now` (struct_time) is between start and
+    end ("HH:MM"), the night possibly crossing midnight."""
+    def minutes(text):
+        h, m = text.split(":")
+        return int(h) * 60 + int(m)
+    try:
+        a, b = minutes(start), minutes(end)
+    except (ValueError, AttributeError):
+        return False
+    t = now.tm_hour * 60 + now.tm_min
+    return a <= t < b if a <= b else (t >= a or t < b)
+
+
 def target_pwm(config, srcs, current):
     """PWM for this poll. Rises at once; falls only once every source is
     `hysteresis` degrees below the point that asked for the current speed.
@@ -1076,13 +1122,14 @@ VOLUME_FULL_PERCENT = 95
 SOURCE_NAMES = {"cpu": "CPU", "sys": "system", "disk": "disk"}
 
 
-def extra_problems(srcs, vols):
+def extra_problems(srcs, vols, full=None):
     """Critical temperatures and full volumes, as stable short strings."""
+    full = full or VOLUME_FULL_PERCENT
     problems = ["%s temperature critical" % SOURCE_NAMES.get(name, name)
                 for name, temp, _, high in srcs
                 if temp >= high + CRITICAL_MARGIN]
     problems += ["volume %s full" % name for name, used, _, _ in vols
-                 if used >= VOLUME_FULL_PERCENT]
+                 if used >= full]
     return problems
 
 
@@ -1429,6 +1476,12 @@ def load_config(path=None):
                        "user": str(task.get("user") or "root")} \
             if isinstance(task, dict) and \
             isinstance(task.get("script"), str) else None
+    config["volumefull"] = int(config["volumefull"])
+    if config["powerloss"] not in ("on", "off", "bios"):
+        config["powerloss"] = "bios"
+    for key in ("statusled", "night"):
+        config[key] = bool(config[key])
+    config.update(PRESETS.get(config["fanmode"], {}))
     config["fans"] = parse_list(config["fans"], int)
     config["systemsensors"] = parse_list(config["systemsensors"])
     config["bays"] = parse_list(config["bays"])
@@ -1466,6 +1519,35 @@ def failsafe(config):
     return 0
 
 
+LPC_CONFIG = "/sys/bus/pci/devices/0000:00:1f.0/config"
+GEN_PMCON_3 = 0xA4      # ICH7 LPC bridge, bit 0 AFTERG1_EN (RTC well)
+
+
+def set_power_loss(mode, path=None):
+    """Set what the Intel ICH does when power returns after a cut.
+
+    AFTERG1_EN = 0 powers the NAS on, 1 leaves it off. The bit lives in
+    the RTC well, so it holds until the BIOS writes it again at boot.
+    Returns the new register value, or None if nothing was changed.
+    """
+    if mode not in ("on", "off"):
+        return None
+    path = path or LPC_CONFIG
+    fd = os.open(path, os.O_RDWR)
+    try:
+        head = os.pread(fd, 12, 0)
+        vendor = head[0] | head[1] << 8
+        if vendor != 0x8086 or head[11] != 0x06 or head[10] != 0x01:
+            raise OSError("00:1f.0 is not an Intel LPC bridge")
+        old = os.pread(fd, 1, GEN_PMCON_3)[0]
+        new = (old & ~1) if mode == "on" else (old | 1)
+        if new != old:
+            os.pwrite(fd, bytes([new]), GEN_PMCON_3)
+        return new
+    finally:
+        os.close(fd)
+
+
 class Stop(Exception):
     pass
 
@@ -1482,8 +1564,14 @@ def run(config):
         log.error("No it87 sensor chip found: is the it87 module loaded?")
         return 1
     log.info("Using %s at %s, fans %s", sio.name, sio.path, config["fans"])
+    try:
+        if set_power_loss(config["powerloss"]) is not None:
+            log.info("After a power cut the NAS stays %s",
+                     "off" if config["powerloss"] == "off" else "on")
+    except OSError as e:
+        log.warning("Cannot set the power-loss behaviour: %s", e)
     panel = None
-    if config["leds"]:
+    if config["leds"] or config["statusled"]:
         try:
             panel = FrontPanel.open()
         except OSError as e:
@@ -1553,10 +1641,13 @@ def run(config):
             current = pwm
             ok, failed_bays, problems = panel_state(
                 fans, disks, read(MDSTAT_FILE) or "", disk_bays(config["bays"]))
-            more = extra_problems(srcs, volumes())
+            night = config["night"] and is_night(
+                time.localtime(now), config["nightstart"], config["nightend"])
+            more = extra_problems(srcs, volumes(), config["volumefull"])
             ok, problems = ok and not more, problems + more
             notifier.update(problems, now)
-            alarms.update(fans, storage_state(read(MDSTAT_FILE) or ""), now)
+            storage = storage_state(read(MDSTAT_FILE) or "")
+            alarms.update(fans, storage, now)
             bays = bay_info(config["bays"], disk, disks.asleep, failed_bays)
             if problems != problems_before:
                 if problems:
@@ -1566,7 +1657,8 @@ def run(config):
                 problems_before = problems
             if panel:
                 try:
-                    panel.show(ok, failed_bays, usb_disk_present())
+                    panel.show(ok, failed_bays, usb_disk_present(),
+                               config["statusled"], config["leds"], night)
                 except OSError as e:
                     log.error("Failed to set the LEDs: %s", e)
             st = {
@@ -1576,8 +1668,10 @@ def run(config):
                 "temps": {"cpu": cpu, "system": system, "disk": disk},
                 "problems": problems,
                 "bays": bays,
+                "storage": storage,
             }
             if lcd:
+                lcd.night = night
                 lcd.update(st)
             write_status(st)
             time.sleep(config["interval"])

@@ -91,6 +91,12 @@ configure_qnapx39d:
         lcdtimeout: {{ config.lcdtimeout }}
         lcdpower: {{ config.lcdpower | to_bool | json }}
         notify: {{ notify | json }}
+        statusled: {{ config.statusled | to_bool | json }}
+        volumefull: {{ config.volumefull }}
+        night: {{ config.night | to_bool | json }}
+        nightstart: {{ config.nightstart | json }}
+        nightend: {{ config.nightend | json }}
+        powerloss: {{ config.powerloss | json }}
         beep: {{ config.beep | to_bool | json }}
         usbcopy: {{ tasks.usbcopy | json }}
         reset: {{ tasks.reset | json }}
