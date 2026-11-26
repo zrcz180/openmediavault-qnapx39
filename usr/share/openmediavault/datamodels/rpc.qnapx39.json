@@ -125,7 +125,7 @@
 				},
 				"bays": {
 					"type": "string",
-					"pattern": "^ata[0-9]+(,ata[0-9]+){0,5}$",
+					"pattern": "^((ata[0-9]+|pci-[0-9a-f:.]+-ata-[0-9]+)(,|$)){1,6}$",
 					"required": true
 				},
 				"lcd": {

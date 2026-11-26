@@ -451,6 +451,35 @@ class Bays(FakeSysfs):
         os.makedirs(block, exist_ok=True)
         os.symlink(path, os.path.join(block, dev))
 
+    def sata(self, dev, pci, ata, port_no):
+        """A disk as on Rui's NAS after a reboot renumbered the ports."""
+        path = os.path.join(self.tmp.name, "devices", "pci0000:00", pci,
+                            ata, "host0", "target0:0:0", "0:0:0:0",
+                            "block", dev)
+        os.makedirs(path)
+        block = os.path.join(self.tmp.name, "block")
+        os.makedirs(block, exist_ok=True)
+        os.symlink(path, os.path.join(block, dev))
+        port = os.path.join(self.tmp.name, "class", "ata_port", ata)
+        os.makedirs(port, exist_ok=True)
+        with open(os.path.join(port, "port_no"), "w") as f:
+            f.write("%d\n" % port_no)
+
+    def test_stable_port_names(self):
+        self.sata("sda", "0000:00:1f.1", "ata1", 1)
+        self.sata("sdb", "0000:03:00.0", "ata3", 1)
+        self.sata("sdf", "0000:03:00.0", "ata6", 4)
+        self.sata("sdh", "0000:04:00.0", "ata12", 2)
+        self.assertEqual(d.disk_port("sdh"), "pci-0000:04:00.0-ata-2")
+        self.assertEqual(d.disk_port("sdb"), "pci-0000:03:00.0-ata-1")
+        self.assertEqual(d.disk_bays(["pci-0000:04:00.0-ata-2",
+                                      "pci-0000:03:00.0-ata-1",
+                                      "pci-0000:03:00.0-ata-2",
+                                      "pci-0000:03:00.0-ata-4"]),
+                         {1: "sdh", 2: "sdb", 4: "sdf"})
+        # Old ataN names still work, and ata1 does not match ata12.
+        self.assertEqual(d.disk_bays(["ata1", "ata3"]), {1: "sda", 2: "sdb"})
+
     def test_bay_info(self):
         self.disk("sdh", "ata13", "WDC WD20EFRX-68EUZN0  ", 3907029168)
         self.disk("sdb", "ata2", "ST500DM002", 976773168)

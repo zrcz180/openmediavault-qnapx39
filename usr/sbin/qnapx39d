@@ -90,9 +90,11 @@ DEFAULTS = {
     "diskinterval": 300,
     "fans": "1,2",           # pwmN drives fanN on the TS-639 Pro
     "leds": True,
-    # Bay N holds the disk on the Nth ATA port listed here (TS-639 Pro,
-    # checked by disk activity: bays 1-4 on ata13, ata2-4; 5-6 on ata9-10).
-    "bays": "ata13,ata2,ata3,ata4,ata9,ata10",
+    # Bay N holds the disk on the Nth SATA port listed here, named as in
+    # /dev/disk/by-path (TS-639 Pro, checked by serial number: bay 1 on the
+    # chipset, bays 2-4 on ports 2-4 of 03:00.0, bays 5-6 on 04:00.0; port
+    # 1 of 03:00.0 is inside the case).
+    "bays": "pci-0000:00:1f.1-ata-1,pci-0000:03:00.0-ata-2,pci-0000:03:00.0-ata-3,pci-0000:03:00.0-ata-4,pci-0000:04:00.0-ata-1,pci-0000:04:00.0-ata-2",
     "lcd": True,
     "lcdport": "/dev/ttyS1",
     "lcdtimeout": 60,        # backlight off after this many seconds, 0 never
@@ -318,14 +320,37 @@ def md_degraded(text):
     return any("_" in m for m in re.findall(r"\[([U_]+)\]", text))
 
 
+def disk_port(dev):
+    """The stable name of the SATA port a disk is on, as udev names it in
+    /dev/disk/by-path (pci-0000:03:00.0-ata-1), or None.
+
+    The kernel's ataN numbers depend on the order the controllers are
+    probed and change between boots; the PCI address of the controller
+    and the port number on it do not.
+    """
+    real = os.path.realpath(sysfs("block", dev))
+    match = re.search(r"/([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])/"
+                      r"(ata\d+)/", real)
+    if not match:
+        return None
+    port = read_int(sysfs("class", "ata_port", match.group(2), "port_no"))
+    if port is None:
+        return None
+    return "pci-%s-ata-%d" % (match.group(1), port)
+
+
 def disk_bays(ports):
-    """{bay number: disk} from the ATA port of each disk's sysfs path."""
+    """{bay number: disk}. Bay N is the Nth port listed: a by-path port
+    name (pci-0000:03:00.0-ata-1) or, as before 7.2.3, a kernel ataN."""
     result = {}
     for path in sorted(glob.glob(sysfs("block", "sd*"))):
+        dev = os.path.basename(path)
         real = os.path.realpath(path)
+        stable = disk_port(dev)
         for bay, port in enumerate(ports, 1):
-            if "/%s/" % port in real:
-                result[bay] = os.path.basename(path)
+            if port == stable or (port.startswith("ata") and
+                                  "/%s/" % port in real):
+                result[bay] = dev
     return result
 
 

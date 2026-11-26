@@ -54,8 +54,16 @@ O BIOS faz piscar o Status com o gerador de pisca 1 ligado ao GP26 (código
 0x16). O plugin desliga esse pisca e o Status fica fixo; volta a piscar
 quando o serviço para.
 
-Baías 1 a 6 = portas ata13, ata2, ata3, ata4, ata9, ata10 (verificado pela
-atividade de cada disco). A porta ata1 não é uma baía.
+Baías (nomes de `/dev/disk/by-path`, verificado pelos números de série):
+
+| Baía | Porta SATA |
+| --- | --- |
+| 1 | `pci-0000:00:1f.1-ata-1` (chipset) |
+| 2, 3, 4 | `pci-0000:03:00.0-ata-2`, `-ata-3`, `-ata-4` |
+| 5, 6 | `pci-0000:04:00.0-ata-1`, `-ata-2` |
+
+A porta 1 da `03:00.0` não é uma baía. Os números `ataN` do kernel mudam
+entre arranques e não servem para identificar uma baía.
 
 LCD: A125 (2 linhas de 16) em `/dev/ttyS1`, 1200 baud 8N1, ligado pelo
 GP10 (ativo a 0; o BIOS deixa-o a 1 e o ecrã apagado). Comandos:
