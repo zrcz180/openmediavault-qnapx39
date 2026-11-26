@@ -19,8 +19,11 @@
 		},
 		"fanmode": {
 			"type": "string",
-			"default": "auto",
+			"default": "normal",
 			"enum": [
+				"quiet",
+				"normal",
+				"performance",
 				"auto",
 				"manual"
 			]
@@ -151,6 +154,35 @@
 		"resettask": {
 			"type": "string",
 			"default": ""
+		},
+		"statusled": {
+			"type": "boolean",
+			"default": true
+		},
+		"volumefull": {
+			"type": "integer",
+			"default": 95,
+			"minimum": 50,
+			"maximum": 100
+		},
+		"night": {
+			"type": "boolean",
+			"default": false
+		},
+		"nightstart": {
+			"type": "string",
+			"default": "22:00",
+			"pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+		},
+		"nightend": {
+			"type": "string",
+			"default": "07:00",
+			"pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+		},
+		"powerloss": {
+			"type": "string",
+			"enum": ["bios", "on", "off"],
+			"default": "bios"
 		}
 	}
 }

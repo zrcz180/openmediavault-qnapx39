@@ -1,0 +1,8 @@
+version: "1.0"
+type: navigation-item
+data:
+  path: "system.qnapx39.frontpanel"
+  text: _("Front panel")
+  position: 15
+  icon: "mdi:led-on"
+  url: "/system/qnapx39/frontpanel"

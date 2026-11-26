@@ -26,6 +26,8 @@ class OMVRpcServiceQnapx39 extends \OMV\Rpc\ServiceAbstract
 		$this->registerMethod("getDisks");
 		$this->registerMethod("getDevice");
 		$this->registerMethod("setButtonSettings");
+		$this->registerMethod("setFrontPanelSettings");
+		$this->registerMethod("getProcessorMemory");
 		$this->registerMethod("getTasks");
 	}
 
@@ -112,6 +114,18 @@ class OMVRpcServiceQnapx39 extends \OMV\Rpc\ServiceAbstract
 				"label" => empty($problems) ? gettext("Green") : gettext("Red"),
 				"value" => empty($problems) ? gettext("All well") :
 					implode("; ", $problems),
+				"unit" => ""
+			];
+		}
+		if (!empty($status["running"])) {
+			$storage = ["ok" => gettext("All good"),
+				"degraded" => gettext("RAID degraded"),
+				"rebuilding" => gettext("RAID rebuilding")];
+			$rows[] = [
+				"kind" => gettext("Storage"),
+				"label" => gettext("Storage"),
+				"value" => $storage[$status["storage"] ?? "ok"] ??
+					$status["storage"],
 				"unit" => ""
 			];
 		}
@@ -290,5 +304,142 @@ class OMVRpcServiceQnapx39 extends \OMV\Rpc\ServiceAbstract
 			];
 		}
 		return $result;
+	}
+
+	/**
+	 * Front panel page: only its own fields.
+	 */
+	public function setFrontPanelSettings($params, $context)
+	{
+		$this->validateMethodContext($context, ["role" => OMV_ROLE_ADMINISTRATOR]);
+		$this->validateMethodParams($params, "rpc.qnapx39.setfrontpanelsettings");
+		$db = \OMV\Config\Database::getInstance();
+		$object = $db->get("conf.service.qnapx39");
+		$object->setAssoc($params);
+		$db->set($object);
+		return $object->getAssoc();
+	}
+
+	private static function formatSize($mb)
+	{
+		return ($mb >= 1024) ? sprintf("%s GB", round($mb / 1024, 1)) :
+			sprintf("%d MB", $mb);
+	}
+
+	/**
+	 * System page, Processor & memory tab: /proc/cpuinfo, cpufreq and
+	 * dmidecode (memory array and devices).
+	 */
+	public function getProcessorMemory($params, $context)
+	{
+		$this->validateMethodContext($context, ["role" => OMV_ROLE_ADMINISTRATOR]);
+		$rows = [];
+		$add = function($property, $value) use (&$rows) {
+			if ($value !== null && $value !== "") {
+				$rows[] = ["property" => $property, "value" => $value];
+			}
+		};
+		$cpuinfo = (string)@file_get_contents("/proc/cpuinfo");
+		if (preg_match('/^model name\s*:\s*(.+)$/m', $cpuinfo, $m)) {
+			$add(gettext("Processor"), preg_replace('/\s+/', ' ', $m[1]));
+		}
+		$threads = preg_match_all('/^processor\s*:/m', $cpuinfo);
+		$cores = preg_match('/^cpu cores\s*:\s*(\d+)/m', $cpuinfo, $m) ?
+			(int)$m[1] : $threads;
+		if ($cores) {
+			$add(gettext("Cores"), ($threads > $cores) ?
+				sprintf(gettext("%d cores, %d threads"), $cores, $threads) :
+				sprintf(gettext("%d cores"), $cores));
+		}
+		$add(gettext("Architecture"), php_uname("m") .
+			(preg_match('/^flags\s*:.*\blm\b/m', $cpuinfo) ?
+				" (" . gettext("the CPU can run 64-bit") . ")" :
+				" (" . gettext("32-bit CPU") . ")"));
+		$freq = "/sys/devices/system/cpu/cpu0/cpufreq/";
+		$min = (int)@file_get_contents($freq . "cpuinfo_min_freq");
+		$max = (int)@file_get_contents($freq . "cpuinfo_max_freq");
+		if ($min && $max) {
+			$add(gettext("Clock speed"), sprintf(gettext("%s to %s GHz"),
+				round($min / 1e6, 1), round($max / 1e6, 1)));
+		} elseif (preg_match('/^cpu MHz\s*:\s*([\d.]+)/m', $cpuinfo, $m)) {
+			$add(gettext("Clock speed"), sprintf(gettext("%s GHz"),
+				round($m[1] / 1000, 2)));
+		}
+		$output = [];
+		try {
+			$cmd = new \OMV\System\Process("dmidecode", "-t", "memory");
+			$cmd->execute($output, $exitStatus);
+		} catch (\Exception $e) {
+			$output = [];
+		}
+		$maxMb = null; $ecc = null; $modules = []; $cur = null;
+		foreach ($output as $line) {
+			$line = trim($line);
+			if ($line === "Memory Device") {
+				if ($cur !== null) { $modules[] = $cur; }
+				$cur = [];
+				continue;
+			}
+			if (!preg_match('/^([^:]+):\s*(.*)$/', $line, $m)) {
+				continue;
+			}
+			list(, $key, $value) = $m;
+			if ($cur === null) {
+				if ($key === "Maximum Capacity" &&
+						preg_match('/(\d+)\s*(MB|GB)/', $value, $v)) {
+					$maxMb = $v[1] * ($v[2] === "GB" ? 1024 : 1);
+				}
+				if ($key === "Error Correction Type") {
+					$ecc = !preg_match('/^None$/i', $value);
+				}
+				continue;
+			}
+			$cur[$key] = $value;
+		}
+		if ($cur !== null) { $modules[] = $cur; }
+		$used = 0; $total = 0; $slots = [];
+		foreach ($modules as $mod) {
+			$size = 0;
+			if (preg_match('/(\d+)\s*(MB|GB)/', $mod["Size"] ?? "", $v)) {
+				$size = $v[1] * ($v[2] === "GB" ? 1024 : 1);
+			}
+			if ($size) {
+				$used++;
+				$total += $size;
+				$speed = preg_match('/(\d+)/', $mod["Speed"] ?? "", $v) ?
+					sprintf(gettext("%d MT/s"), $v[1]) : null;
+				$maker = implode(" ", array_filter(array_map(function($k) use ($mod) {
+					$x = trim($mod[$k] ?? "");
+					return preg_match('/^(unknown|not specified|' .
+						'manufacturer\d*|partnum\d*|0+)$/i', $x) ? "" : $x;
+				}, ["Manufacturer", "Part Number"])));
+				$value = implode(" ", array_filter([self::formatSize($size),
+					$mod["Type"] ?? null, $speed]));
+				if ($maker !== "") {
+					$value .= ", " . $maker;
+				}
+			} else {
+				$value = gettext("Empty");
+			}
+			$slots[] = $value;
+		}
+		if ($used) {
+			$add(gettext("Memory"), sprintf(gettext("%s installed, %d of %d slots used"),
+				self::formatSize($total), $used, count($modules)));
+		} elseif (preg_match('/^MemTotal:\s*(\d+)/m',
+				(string)@file_get_contents("/proc/meminfo"), $m)) {
+			$add(gettext("Memory"), self::formatSize((int)($m[1] / 1024)));
+		}
+		if ($maxMb) {
+			$add(gettext("Maximum memory (BIOS)"), self::formatSize($maxMb));
+		}
+		if ($ecc !== null) {
+			$add(gettext("Error correction (ECC)"), $ecc ? gettext("Yes") :
+				gettext("No"));
+		}
+		foreach ($slots as $n => $value) {
+			$add(sprintf(gettext("Memory slot %d"), $n + 1), $value);
+		}
+		return $this->applyFilter($rows, 0, count($rows), null, null);
 	}
 }

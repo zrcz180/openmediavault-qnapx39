@@ -265,8 +265,6 @@ class Collectd(unittest.TestCase):
         self.assertIsNone(d.parse_smart_temp({}))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class FrontLcd(unittest.TestCase):
@@ -745,3 +743,95 @@ class ButtonsAndBeeps(unittest.TestCase):
         c = config(usbcopy={"script": "/x", "user": "rui"}, reset="bad")
         self.assertEqual(c["usbcopy"], {"script": "/x", "user": "rui"})
         self.assertIsNone(c["reset"])
+
+
+class ModesAndNight(unittest.TestCase):
+    def test_presets_override_curve(self):
+        c = config(fanmode="quiet", cpulow=10)
+        self.assertEqual((c["cpulow"], c["maxpwm"]), (65, 200))
+        c = config(fanmode="auto", cpulow=10)
+        self.assertEqual(c["cpulow"], 10)
+
+    def test_is_night(self):
+        t = lambda h, m: d.time.struct_time((2026, 1, 1, h, m, 0, 0, 1, 0))
+        self.assertTrue(d.is_night(t(23, 0), "22:00", "07:00"))
+        self.assertTrue(d.is_night(t(6, 59), "22:00", "07:00"))
+        self.assertFalse(d.is_night(t(7, 0), "22:00", "07:00"))
+        self.assertTrue(d.is_night(t(13, 0), "12:00", "14:00"))
+        self.assertFalse(d.is_night(t(15, 0), "12:00", "14:00"))
+        self.assertFalse(d.is_night(t(1, 0), "bad", "07:00"))
+
+    def test_volume_full_threshold(self):
+        vols = [("data", 90, 1, 10)]
+        self.assertEqual(d.extra_problems([], vols), [])
+        self.assertEqual(d.extra_problems([], vols, 85), ["volume data full"])
+
+
+class NightLeds(unittest.TestCase):
+    def setUp(self):
+        self.io = FakeIO([0xED, 0x0F, 0x9F, 0x7B, 0xFD])
+        self.panel = d.FrontPanel(self.io, 0xA20, [0x16, 0],
+                                  d.SuperIOConfig(self.io))
+
+    def pin(self, s, bit):
+        return self.io.ports[0xA20 + s - 1] >> bit & 1
+
+    def test_night_green_off_red_stays(self):
+        self.panel.show(True, set(), night=True)
+        self.assertEqual(self.pin(3, 5), 1)    # green off
+        self.panel.show(False, {1}, night=True)
+        self.assertEqual(self.pin(3, 4), 0)    # red on
+        self.assertEqual(self.pin(2, 3), 0)    # bay 1 red on
+
+    def test_status_left_to_bios(self):
+        self.panel.show(True, set(), status=False)
+        self.assertEqual(self.io.ports[0xA22], 0x9F)
+        self.assertNotIn(0xF8, self.io.config)  # blink untouched
+
+
+class PowerLoss(unittest.TestCase):
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp()
+        cfg = bytearray(256)
+        cfg[0:2] = b"\x86\x80"          # Intel
+        cfg[2:4] = b"\xb9\x27"          # ICH7-M LPC
+        cfg[10], cfg[11] = 0x01, 0x06   # ISA bridge
+        cfg[0xA4] = 0x38                # as read on the TS-639 Pro
+        os.write(fd, bytes(cfg))
+        os.close(fd)
+
+    def tearDown(self):
+        os.unlink(self.path)
+
+    def reg(self):
+        with open(self.path, "rb") as f:
+            return f.read()[0xA4]
+
+    def test_off_then_on(self):
+        self.assertEqual(d.set_power_loss("off", self.path), 0x39)
+        self.assertEqual(self.reg(), 0x39)
+        self.assertEqual(d.set_power_loss("on", self.path), 0x38)
+        self.assertEqual(self.reg(), 0x38)
+
+    def test_bios_leaves_it(self):
+        self.assertIsNone(d.set_power_loss("bios", self.path))
+        self.assertEqual(self.reg(), 0x38)
+
+    def test_not_intel(self):
+        with open(self.path, "r+b") as f:
+            f.write(b"\x22\x10")
+        with self.assertRaises(OSError):
+            d.set_power_loss("off", self.path)
+        self.assertEqual(self.reg(), 0x38)
+
+    def test_bad_value_in_config(self):
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            json.dump({"powerloss": "maybe"}, f)
+        try:
+            self.assertEqual(d.load_config(f.name)["powerloss"], "bios")
+        finally:
+            os.unlink(f.name)
+
+
+if __name__ == "__main__":
+    unittest.main()

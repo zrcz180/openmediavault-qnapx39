@@ -17,7 +17,7 @@ kernel, os pinos GPIO da IT8718F e a porta série do ecrã. Do original
 vêm a estrutura do plugin (Salt, páginas da interface, painel, gráficos),
 o leitor de temperaturas dos discos e os emails de avaria.
 
-Versão atual: **7.4.0** (OpenMediaVault 7, Debian 12 "bookworm").
+Versão atual: **7.5.0** (OpenMediaVault 7, Debian 12 "bookworm").
 
 ## O que está incorporado
 
@@ -29,7 +29,9 @@ Versão atual: **7.4.0** (OpenMediaVault 7, Debian 12 "bookworm").
 - Os discos em repouso nunca são acordados para ler a temperatura.
 - Histerese: a velocidade sobe logo e só desce depois de arrefecer alguns
   graus.
-- Modo manual com velocidade fixa.
+- Modos como no QTS: **Quiet** (silencioso), **Normal**, **Performance**
+  (mais fresco), **Custom** (temperaturas à escolha) e **Fixed**
+  (velocidade fixa).
 - Segurança: sem leituras, com um sensor 10 °C acima do máximo, ou com o
   serviço parado ou com erro, as ventoinhas vão a 100 %.
 - Aviso no registo se uma ventoinha marcar 0 RPM com potência alta.
@@ -43,6 +45,19 @@ Versão atual: **7.4.0** (OpenMediaVault 7, Debian 12 "bookworm").
 - **LED vermelho da baía** do disco avariado.
 - **USB** azul enquanto houver um disco USB ligado.
 - Quando o serviço para, os LEDs voltam ao estado em que o BIOS os deixou.
+- **Luzes apagadas à noite** (opcional, com hora de início e fim): o
+  Status verde, o USB e a luz do LCD ficam apagados; os vermelhos de
+  avaria continuam a acender. Estes LEDs só ligam ou desligam, não dá para
+  reduzir o brilho.
+- Limite de volume cheio à escolha (95 % por omissão) para o Status
+  vermelho.
+
+### Energia
+
+- **Depois de um corte de corrente**: ligar sozinho quando a corrente
+  volta, ficar desligado, ou deixar como está no BIOS. O plugin escreve o
+  bit AFTERG1 do chipset (Intel ICH7, registo 0xA4) sempre que o serviço
+  arranca.
 
 ### Ecrã LCD da frente
 
@@ -87,9 +102,14 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
 
 ### Interface web e avisos
 
-- **Sistema > QNAP > Fan control**: ventoinhas, temperaturas, LEDs, mapa
-  das baías e ecrã LCD.
-- **Sistema > QNAP > Status**: leituras atuais e estado do LED.
+- **Sistema > QNAP > Fan control**: modo das ventoinhas e temperaturas.
+- **Sistema > QNAP > Front panel**: LEDs, mapa das baías, noite, volume
+  cheio, ecrã LCD e o que fazer depois de um corte de corrente.
+- **Sistema > QNAP > Status**: leituras atuais, estado do LED e do
+  armazenamento (RAID).
+- **Sistema > QNAP > System**: separadores Device (modelo, série, BIOS,
+  kernel, versão) e Processor & memory (CPU, frequência, 32 ou 64 bits,
+  memória e ranhuras).
 - **Sistema > QNAP > Disks**: cada baía com o disco, modelo, tamanho,
   temperatura, estado e LED vermelho.
 - Painel inicial: quadro com as ventoinhas e temperaturas, dados do
@@ -107,7 +127,7 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
 
 ## Instalar
 
-1. Descarregar o `openmediavault-qnapx39_7.4.0_all.deb` da página
+1. Descarregar o `openmediavault-qnapx39_7.5.0_all.deb` da página
    [Releases](https://github.com/zrcz180/openmediavault-qnapx39/releases)
    (ou construí-lo, ver abaixo).
 2. Se tinha outro programa a usar o ecrã (por exemplo um serviço
@@ -117,7 +137,7 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
    ```
 3. Instalar:
    ```sh
-   sudo dpkg -i openmediavault-qnapx39_7.4.0_all.deb
+   sudo dpkg -i openmediavault-qnapx39_7.5.0_all.deb
    ```
 4. Em Sistema > QNAP > Fan control, ativar, **Guardar** e **Aplicar**.
 

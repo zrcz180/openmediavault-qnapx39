@@ -1,0 +1,49 @@
+version: "1.0"
+type: component
+data:
+  name: omv-system-qnapx39-system-tabs-page
+  type: tabsPage
+  config:
+    tabs:
+      - type: datatable
+        label: _("Device")
+        config:
+          autoReload: false
+          hasSearchField: false
+          hasFooter: false
+          selectionType: none
+          limit: 0
+          stateId: b4cdbf53-b5c7-441a-89ee-6b945a15cb93
+          store:
+            proxy:
+              service: Qnapx39
+              get:
+                method: getDevice
+          columns:
+            - name: _("Property")
+              prop: property
+              flexGrow: 1
+            - name: _("Value")
+              prop: value
+              flexGrow: 3
+      - type: datatable
+        label: _("Processor & memory")
+        config:
+          autoReload: false
+          hasSearchField: false
+          hasFooter: false
+          selectionType: none
+          limit: 0
+          stateId: 6202d0af-4355-4a7b-8be1-dd05b2dae52e
+          store:
+            proxy:
+              service: Qnapx39
+              get:
+                method: getProcessorMemory
+          columns:
+            - name: _("Property")
+              prop: property
+              flexGrow: 1
+            - name: _("Value")
+              prop: value
+              flexGrow: 3

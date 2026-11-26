@@ -1,3 +1,14 @@
+openmediavault-qnapx39 (7.5.0) stable; urgency=low
+
+  * Fan modes as in QTS: Quiet, Normal, Performance, Custom and Fixed.
+  * System > QNAP > Front panel: Status light, disk and USB lights, bay
+    map, volume-full threshold, lights off at night, front LCD and what
+    to do after a power cut (ICH7 AFTERG1: on, off or BIOS).
+  * System > QNAP > System: Device and Processor & memory tabs.
+  * Status page and dashboard grid: storage (RAID) state.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 17:10:00 -0000
+
 openmediavault-qnapx39 (7.4.0) stable; urgency=low
 
   * System > QNAP > Buttons: USB Copy (GP16) runs a chosen Scheduled
