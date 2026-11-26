@@ -62,6 +62,7 @@ configure_qnapx39d:
         bays: {{ config.bays | json }}
         lcd: {{ config.lcd | to_bool | json }}
         lcdtimeout: {{ config.lcdtimeout }}
+        lcdpower: {{ config.lcdpower | to_bool | json }}
     - serializer: json
     - makedirs: True
     - user: root

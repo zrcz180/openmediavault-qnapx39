@@ -23,9 +23,11 @@ por isso aquele plugin não serve. Este usa o driver `it87` do kernel.
   com uma ventoinha avariada, um disco avariado (S.M.A.R.T. ou RAID) ou um
   RAID degradado; o LED vermelho da baía do disco avariado acende; o LED
   USB fica azul enquanto houver um disco USB ligado.
-- Ecrã LCD da frente (fase 2): nome e IP, estado, temperaturas,
-  ventoinhas, discos e tempo ligado. SELECT mostra a página seguinte e
-  ENTER a anterior. A luz apaga ao fim de um tempo sem carregar num botão
+- Ecrã LCD da frente (fase 2): IP de cada placa de rede, estado,
+  temperaturas, ventoinhas, cada baía (disco, temperatura, estado,
+  tamanho, modelo) e tempo ligado. SELECT mostra a página seguinte e
+  ENTER a anterior. Na última página, ENTER abre o menu Reiniciar/Desligar
+  (pede confirmação; pode ser desativado). A luz apaga ao fim de um tempo sem carregar num botão
   (0 = sempre acesa) e volta a acender com um problema novo.
 
 ## TS-639 Pro (verificado)

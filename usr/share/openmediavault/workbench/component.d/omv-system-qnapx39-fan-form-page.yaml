@@ -275,7 +275,7 @@ data:
         name: lcd
         label: _("Show status on the front LCD")
         value: true
-        hint: _("Host name and IP address, status, temperatures, fans, disks and uptime. SELECT shows the next page and ENTER the previous one. Stop any other program that uses /dev/ttyS1 first.")
+        hint: _("IP address of each network port, status, temperatures, fans, each disk bay and uptime. SELECT shows the next page and ENTER the previous one. Stop any other program that uses /dev/ttyS1 first.")
       - type: numberInput
         name: lcdtimeout
         label: _("Backlight off after")
@@ -286,6 +286,17 @@ data:
           min: 0
           max: 3600
           patternType: integer
+        modifiers:
+          - type: visible
+            constraint:
+              operator: truthy
+              arg0:
+                prop: lcd
+      - type: checkbox
+        name: lcdpower
+        label: _("Allow reboot and shutdown from the LCD")
+        value: true
+        hint: _("On the last page, ENTER opens a menu. SELECT picks Reboot or Shut down, ENTER chooses and a second ENTER confirms.")
         modifiers:
           - type: visible
             constraint:

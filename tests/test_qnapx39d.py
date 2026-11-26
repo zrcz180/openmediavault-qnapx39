@@ -325,21 +325,39 @@ class FrontLcd(unittest.TestCase):
                                                        "rpm": 1713}],
               "temps": {"cpu": [("Core 0", 28.0)],
                         "system": [("temp1", 40.0), ("temp2", 38.0)],
-                        "disk": [("sdb", 35.0), ("sdc", 38.0)]}}
-        pages = d.lcd_pages(st, "nas", "192.168.1.5", ("Up 1d 02:03", "L"))
+                        "disk": [("sdb", 35.0), ("sdc", 38.0)]},
+              "bays": [{"bay": 1, "dev": "sdh", "model": "WDC WD20EFRX-68",
+                        "size": "2.0T", "temp": 35.0, "state": "OK"},
+                       {"bay": 2, "dev": "sdb", "model": "ST4000", "size":
+                        "4.0T", "temp": None, "state": "FAILED"},
+                       {"bay": 3, "dev": None, "state": "empty"}]}
+        nics = [("eth0", "192.168.1.5", "1000Mb"), ("eth1", None, "down")]
+        pages = d.lcd_pages(st, "nas", nics, ("Up 1d 02:03", "L"), True)
         self.assertEqual(pages, [
-            ("nas", "192.168.1.5"), ("Status: OK", "All well"),
+            ("nas eth0 1000Mb", "192.168.1.5"),
+            ("nas eth1 down", "no IP address"),
+            ("Status: OK", "All well"),
             ("CPU 28C", "System 40C"), ("Fans 30%", "1715 1713 RPM"),
-            ("Disks 2, max 38C", "min 35C"), ("Up 1d 02:03", "L")])
-        for line in sum(map(list, pages), []):
-            self.assertLessEqual(len(line), 16)
-        pages = d.lcd_pages({"problems": ["fan1 failed"]}, "nas", None)
+            ("Disks 2, max 38C", "min 35C"),
+            ("B1 sdh 35C OK", "2.0T WDC WD20EFRX-68"),
+            ("B2 sdb  FAIL", "4.0T ST4000"),
+            ("Bay 3", "empty"),
+            ("Up 1d 02:03", "L"), d.POWER_PAGE])
+        pages = d.lcd_pages({"problems": ["fan1 failed"]}, "nas", [])
+        self.assertEqual(pages[0], ("nas", "no network"))
         self.assertEqual(pages[1], ("Status: PROBLEM", "fan1 failed"))
-        self.assertEqual(pages[0][1], "no IP address")
+        self.assertNotIn(d.POWER_PAGE, pages)
+
+    def panel(self, **kw):
+        self.ran = []
+        panel = d.LcdPanel(self.lcd, 60, clock=lambda: self.now[0],
+                           runner=self.ran.append, **kw)
+        panel.interfaces_time = 1e9   # no real network lookups
+        panel.interfaces = [("eth0", "10.0.0.2", "1000Mb")]
+        return panel
 
     def test_buttons_pages_and_backlight_timeout(self):
-        panel = d.LcdPanel(self.lcd, 60, clock=lambda: self.now[0])
-        panel.address_time = 0
+        panel = self.panel()
         panel.update({"problems": []})
         panel.refresh()
         self.assertEqual(panel.page, 0)
@@ -350,10 +368,8 @@ class FrontLcd(unittest.TestCase):
         panel.press(d.LCD_ENTER)
         panel.press(d.LCD_ENTER)
         panel.refresh()
-        self.assertEqual(panel.page, len(d.lcd_pages({}, "", "",
-                                                     d.uptime_text())) - 1)
+        self.assertEqual(panel.page, len(panel.pages()) - 1)
         self.now[0] = 59.0
-        panel.address_time = 59.0
         panel.refresh()
         self.assertTrue(self.lcd.lit)
         self.now[0] = 61.0
@@ -366,11 +382,107 @@ class FrontLcd(unittest.TestCase):
         self.assertEqual(panel.page, page)
         # A new problem jumps to the Status page and lights the panel.
         self.now[0] = 200.0
-        panel.address_time = 200.0
         panel.refresh()
         self.assertFalse(self.lcd.lit)
         panel.update({"problems": ["RAID degraded"]})
         panel.refresh()
         self.assertTrue(self.lcd.lit)
-        self.assertEqual(panel.page, d.LcdPanel.STATUS_PAGE)
+        self.assertEqual(panel.page, 1)
         self.assertEqual(self.lcd.lines[1], d.lcd_text("RAID degraded"))
+
+    def go_to_power_menu(self, panel):
+        panel.refresh()
+        panel.press(d.LCD_ENTER)          # back from page 0: last page
+        panel.refresh()
+        self.assertEqual(self.lcd.lines[0], d.lcd_text(d.POWER_PAGE[0]))
+        panel.press(d.LCD_ENTER)          # open the menu
+        panel.refresh()
+        self.assertEqual(self.lcd.lines[0], d.lcd_text("> Cancel"))
+
+    def test_reboot_needs_two_enters(self):
+        panel = self.panel(power=True)
+        self.go_to_power_menu(panel)
+        panel.press(d.LCD_SELECT)         # Reboot
+        panel.press(d.LCD_ENTER)
+        panel.refresh()
+        self.assertEqual(self.lcd.lines[0], d.lcd_text("Reboot? Sure?"))
+        self.assertEqual(self.ran, [])
+        panel.press(d.LCD_ENTER)
+        panel.refresh()
+        self.assertEqual(self.ran, [["systemctl", "reboot"]])
+        self.assertEqual(self.lcd.lines[0], d.lcd_text("Rebooting..."))
+        panel.press(d.LCD_SELECT)         # ignored from now on
+        self.assertEqual(len(self.ran), 1)
+
+    def test_menu_cancels(self):
+        panel = self.panel(power=True)
+        self.go_to_power_menu(panel)
+        panel.press(d.LCD_SELECT)
+        panel.press(d.LCD_SELECT)         # Shut down
+        panel.press(d.LCD_ENTER)
+        panel.press(d.LCD_SELECT)         # "no"
+        panel.refresh()
+        self.assertIsNone(panel.menu)
+        self.assertEqual(self.lcd.lines[0], d.lcd_text(d.POWER_PAGE[0]))
+        panel.press(d.LCD_ENTER)          # menu again
+        panel.press(d.LCD_SELECT)
+        panel.press(d.LCD_ENTER)          # Sure?
+        self.now[0] = 16.0                # no answer: cancelled
+        panel.refresh()
+        self.assertIsNone(panel.menu)
+        panel.press(d.LCD_ENTER)
+        self.assertEqual(self.ran, [])
+
+    def test_no_power_page_without_option(self):
+        panel = self.panel()
+        self.assertNotIn(d.POWER_PAGE, panel.pages())
+
+
+class Bays(FakeSysfs):
+    def disk(self, dev, port, model, sectors):
+        path = os.path.join(self.tmp.name, "devices", "pci0", port,
+                            "host0", "block", dev)
+        os.makedirs(os.path.join(path, "device"))
+        with open(os.path.join(path, "device", "model"), "w") as f:
+            f.write(model + "\n")
+        with open(os.path.join(path, "size"), "w") as f:
+            f.write("%d\n" % sectors)
+        block = os.path.join(self.tmp.name, "block")
+        os.makedirs(block, exist_ok=True)
+        os.symlink(path, os.path.join(block, dev))
+
+    def test_bay_info(self):
+        self.disk("sdh", "ata13", "WDC WD20EFRX-68EUZN0  ", 3907029168)
+        self.disk("sdb", "ata2", "ST500DM002", 976773168)
+        info = d.bay_info(["ata13", "ata2", "ata3"], [("sdh", 34.0)],
+                          {"sdb"}, set())
+        self.assertEqual(info, [
+            {"bay": 1, "dev": "sdh", "model": "WDC WD20EFRX-68EUZN0",
+             "size": "2.0T", "temp": 34.0, "state": "OK"},
+            {"bay": 2, "dev": "sdb", "model": "ST500DM002", "size": "500G",
+             "temp": None, "state": "sleep"},
+            {"bay": 3, "dev": None, "state": "empty"}])
+        self.assertEqual(d.bay_info(["ata13"], [], set(), {1})[0]["state"],
+                         "FAILED")
+
+    def test_network_interfaces(self):
+        net = os.path.join(self.tmp.name, "class", "net")
+        for name, files in (("lo", {}),
+                            ("eth0", {"device": "", "operstate": "up",
+                                      "speed": "1000"}),
+                            ("eth1", {"device": "", "operstate": "down",
+                                      "speed": "-1"}),
+                            ("eth2", {"device": "", "master": "",
+                                      "operstate": "up"}),
+                            ("docker0", {"operstate": "down"})):
+            os.makedirs(os.path.join(net, name))
+            for k, v in files.items():
+                with open(os.path.join(net, name, k), "w") as f:
+                    f.write(v)
+        real, d.ipv4_address = d.ipv4_address, \
+            {"eth0": "192.168.1.5"}.get
+        try:
+            self.assertEqual(d.network_interfaces(), [
+                ("eth0", "192.168.1.5", "1000Mb"), ("eth1", None, "down")])
+        finally:
+            d.ipv4_address = real

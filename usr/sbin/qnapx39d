@@ -29,9 +29,9 @@ is green when all is well and red on a failed fan, a failed disk or a
 degraded RAID; a disk's red LED lights when that disk fails; the blue USB
 LED is on while a USB disk is plugged in.
 
-The front LCD (A125, /dev/ttyS1) shows the host name and IP address, the
-status, temperatures, fans, disks and uptime; SELECT and ENTER step
-through the pages.
+The front LCD (A125, /dev/ttyS1) shows the IP address of each network
+port, the status, temperatures, fans, disks and uptime; SELECT and ENTER
+step through the pages, and the last page can reboot or shut down.
 
 Commands:
   run        control the fans until stopped (systemd service)
@@ -73,6 +73,7 @@ LCD_ENTER = 1
 LCD_SELECT = 2
 # Seconds between LCD refreshes (and button checks).
 LCD_REFRESH = 1
+SIOCGIFADDR = 0x8915
 
 DEFAULTS = {
     "enable": False,
@@ -95,6 +96,7 @@ DEFAULTS = {
     "lcd": True,
     "lcdport": "/dev/ttyS1",
     "lcdtimeout": 60,        # backlight off after this many seconds, 0 never
+    "lcdpower": True,        # Shutdown/Reboot menu on the LCD
 }
 
 log = logging.getLogger("qnapx39d")
@@ -324,6 +326,35 @@ def disk_bays(ports):
         for bay, port in enumerate(ports, 1):
             if "/%s/" % port in real:
                 result[bay] = os.path.basename(path)
+    return result
+
+
+def size_text(sectors):
+    """1.8T, 500G... from a count of 512-byte sectors."""
+    size = sectors * 512 / 1000.0 ** 3
+    if size >= 1000:
+        return "%.1fT" % (size / 1000)
+    return "%.0fG" % size
+
+
+def bay_info(ports, readings, asleep, failed_bays):
+    """One entry per bay: disk, model, size, temperature and state."""
+    bays = disk_bays(ports)
+    temps = dict(readings)
+    result = []
+    for bay in range(1, len(ports) + 1):
+        dev = bays.get(bay)
+        if not dev:
+            result.append({"bay": bay, "dev": None, "state": "empty"})
+            continue
+        model = " ".join((read(sysfs("block", dev, "device", "model"))
+                          or "").split())
+        result.append({
+            "bay": bay, "dev": dev, "model": model,
+            "size": size_text(read_int(sysfs("block", dev, "size")) or 0),
+            "temp": temps.get(dev),
+            "state": "FAILED" if bay in failed_bays else
+                     "sleep" if dev in asleep else "OK"})
     return result
 
 
@@ -614,16 +645,44 @@ class Lcd:
             os.close(self.fd)
 
 
-def host_address():
-    """The first global IPv4 address, or None."""
+def ipv4_address(name):
+    """The IPv4 address of a network interface, or None."""
+    import fcntl
+    import socket
+    import struct
     try:
-        out = subprocess.run(["ip", "-4", "-o", "addr", "show",
-                              "scope", "global"], capture_output=True,
-                             text=True, timeout=5).stdout
-    except (OSError, subprocess.SubprocessError):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            data = fcntl.ioctl(s.fileno(), SIOCGIFADDR,
+                               struct.pack("256s", name.encode()[:15]))
+        return socket.inet_ntoa(data[20:24])
+    except OSError:
         return None
-    match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
-    return match.group(1) if match else None
+
+
+def network_interfaces():
+    """[(name, IPv4 address or None, link text)] for the network ports.
+
+    Physical ports (with a device in sysfs) are always listed, so an
+    unplugged one shows as such; bridges, bonds and VLANs only when they
+    have an address. Ports enslaved to a bridge or bond are left out: the
+    address is on the bridge or bond.
+    """
+    result = []
+    for path in sorted(glob.glob(sysfs("class", "net", "*"))):
+        name = os.path.basename(path)
+        if name == "lo" or os.path.exists(os.path.join(path, "master")):
+            continue
+        physical = os.path.exists(os.path.join(path, "device"))
+        address = ipv4_address(name)
+        if not physical and not address:
+            continue
+        if read(os.path.join(path, "operstate")) == "up":
+            speed = read_int(os.path.join(path, "speed"))
+            link = "%dMb" % speed if speed and speed > 0 else "up"
+        else:
+            link = "down"
+        result.append((name, address, link))
+    return result
 
 
 def uptime_text():
@@ -637,9 +696,19 @@ def uptime_text():
             "Load " + " ".join(load))
 
 
-def lcd_pages(status, hostname, address, uptime=("", "")):
+POWER_PAGE = ("Shutdown/Reboot", "ENTER = menu")
+
+
+def lcd_pages(status, hostname, interfaces, uptime=("", ""), power=False):
     """The pages SELECT steps through, each two 16-character lines."""
-    pages = [(hostname, address or "no IP address")]
+    pages = []
+    for name, address, link in interfaces:
+        pages.append(("%s %s %s" % (hostname, name, link)
+                      if len(hostname) + len(name) + len(link) < 15
+                      else "%s %s" % (name, link),
+                      address or "no IP address"))
+    if not pages:
+        pages.append((hostname, "no network"))
     problems = status.get("problems") or []
     if problems:
         pages.append(("Status: PROBLEM", problems[0]))
@@ -662,8 +731,18 @@ def lcd_pages(status, hostname, address, uptime=("", "")):
                       "min %.0fC" % min(disks)))
     else:
         pages.append(("Disks", "asleep/no data"))
+    for b in status.get("bays") or []:
+        if not b.get("dev"):
+            pages.append(("Bay %d" % b["bay"], "empty"))
+            continue
+        temp = "%.0fC" % b["temp"] if b.get("temp") is not None else ""
+        state = "FAIL" if b["state"] == "FAILED" else b["state"]
+        pages.append(("B%d %s %s %s" % (b["bay"], b["dev"], temp, state),
+                      "%s %s" % (b.get("size", ""), b.get("model", ""))))
     if any(uptime):
         pages.append(uptime)
+    if power:
+        pages.append(POWER_PAGE)
     return pages
 
 
@@ -671,52 +750,112 @@ class LcdPanel:
     """Shows the daemon's status on the LCD; SELECT next page, ENTER
     previous page. Any button lights the backlight, which goes off after
     `timeout` seconds without a press (0 = always on). A new problem
-    lights it and jumps to the Status page."""
+    lights it and jumps to the Status page.
 
-    STATUS_PAGE = 1
+    With `power`, the last page opens a menu with ENTER: SELECT picks
+    Cancel, Reboot or Shut down, ENTER chooses, and a second ENTER on
+    "Sure?" runs it. Anything else, or 15 s without a press, cancels.
+    """
 
-    def __init__(self, lcd, timeout, clock=time.monotonic):
+    MENU = ("Cancel", "Reboot", "Shut down")
+    COMMANDS = {"Reboot": ["systemctl", "reboot"],
+                "Shut down": ["systemctl", "poweroff"]}
+    MENU_TIMEOUT = 15
+
+    def __init__(self, lcd, timeout, power=False, clock=time.monotonic,
+                 runner=subprocess.Popen):
         self.lcd = lcd
         self.timeout = timeout
+        self.power = power
         self.clock = clock
+        self.runner = runner
         self.page = 0
         self.touched = clock()
         self.status = {}
         self.problems = []
-        self.hostname = os.uname().nodename
-        self.address = None
-        self.address_time = None
+        self.hostname = os.uname().nodename.split(".")[0]
+        self.interfaces = []
+        self.interfaces_time = None
+        self.menu = None      # index in MENU while the menu is open
+        self.sure = False     # asking for confirmation
+        self.farewell = None  # last message, once a power action started
         self.stopping = False
+
+    def pages(self):
+        return lcd_pages(self.status, self.hostname, self.interfaces,
+                         uptime_text(), self.power)
+
+    def status_page(self):
+        return max(1, len(self.interfaces))
 
     def update(self, status):
         """Called by the fan loop with each new status."""
         problems = status.get("problems") or []
-        if problems and problems != self.problems:
-            self.page = self.STATUS_PAGE
+        if problems and problems != self.problems and self.menu is None:
+            self.page = self.status_page()
             self.touched = self.clock()
         self.problems = problems
         self.status = status
 
     def press(self, button):
-        if self.lcd.lit is False:
-            pass  # the first press only wakes the panel
+        asleep = self.lcd.lit is False
+        self.touched = self.clock()
+        if asleep or self.farewell:
+            return  # the first press only wakes the panel
+        if self.menu is not None:
+            self.press_menu(button)
+            return
+        pages = self.pages()
+        self.page %= len(pages)
+        if button == LCD_ENTER and pages[self.page] == POWER_PAGE:
+            self.menu, self.sure = 0, False
         elif button == LCD_SELECT:
             self.page += 1
         elif button == LCD_ENTER:
             self.page -= 1
-        self.touched = self.clock()
+
+    def press_menu(self, button):
+        choice = self.MENU[self.menu]
+        if button == LCD_SELECT:
+            if self.sure:
+                self.menu, self.sure = None, False   # "no"
+            else:
+                self.menu = (self.menu + 1) % len(self.MENU)
+        elif button == LCD_ENTER:
+            if choice == "Cancel":
+                self.menu = None
+            elif not self.sure:
+                self.sure = True
+            else:
+                self.menu, self.sure = None, False
+                self.farewell = ("Rebooting..." if choice == "Reboot"
+                                 else "Shutting down", "Please wait")
+                log.warning("%s requested on the front LCD", choice)
+                self.runner(self.COMMANDS[choice])
+
+    def screen(self):
+        if self.farewell:
+            return self.farewell
+        if self.menu is not None:
+            choice = self.MENU[self.menu]
+            if self.sure:
+                return ("%s? Sure?" % choice, "ENTER yes SEL no")
+            return ("> " + choice, "SEL next ENTER ok")
+        pages = self.pages()
+        self.page %= len(pages)
+        return pages[self.page]
 
     def refresh(self):
         now = self.clock()
-        if self.address_time is None or now - self.address_time > 60:
-            self.address = host_address()
-            self.address_time = now
-        pages = lcd_pages(self.status, self.hostname, self.address,
-                          uptime_text())
-        self.page %= len(pages)
-        self.lcd.backlight(not self.timeout or
-                           now - self.touched < self.timeout)
-        self.lcd.show(pages[self.page])
+        if self.interfaces_time is None or now - self.interfaces_time > 30:
+            self.interfaces = network_interfaces()
+            self.interfaces_time = now
+        idle = now - self.touched
+        if self.menu is not None and idle > self.MENU_TIMEOUT:
+            self.menu, self.sure = None, False
+        self.lcd.backlight(bool(self.farewell) or not self.timeout or
+                           idle < self.timeout)
+        self.lcd.show(self.screen())
 
     def loop(self):
         self.lcd.backlight(True)
@@ -739,8 +878,12 @@ class LcdPanel:
         self.stopping = True
         if thread:
             thread.join(LCD_REFRESH + 2)
-        self.lcd.close(("openmediavault", "qnapx39d stopped"))
-
+        if self.farewell:
+            # Leave the message lit while the system goes down.
+            self.lcd.show(self.farewell)
+            os.close(self.lcd.fd)
+        else:
+            self.lcd.close(("openmediavault", "qnapx39d stopped"))
 
 # --------------------------------------------------------------------------
 # Fan curve
@@ -804,7 +947,8 @@ def load_config(path=None):
                 "cpulow", "cpuhigh", "syslow", "syshigh", "disklow",
                 "diskhigh", "diskinterval", "lcdtimeout"):
         config[key] = int(config[key])
-    for key in ("enable", "usecpu", "usesystem", "usedisk", "leds", "lcd"):
+    for key in ("enable", "usecpu", "usesystem", "usedisk", "leds", "lcd",
+                "lcdpower"):
         config[key] = bool(config[key])
     config["fans"] = parse_list(config["fans"], int)
     config["systemsensors"] = parse_list(config["systemsensors"])
@@ -859,7 +1003,8 @@ def run(config):
     lcd = lcd_thread = None
     if config["lcd"]:
         try:
-            lcd = LcdPanel(Lcd.open(config["lcdport"]), config["lcdtimeout"])
+            lcd = LcdPanel(Lcd.open(config["lcdport"]), config["lcdtimeout"],
+                           config["lcdpower"])
             lcd_thread = lcd.start()
         except OSError as e:
             log.warning("Front LCD disabled: %s", e)
@@ -873,9 +1018,10 @@ def run(config):
             now = time.time()
             cpu = cpu_temps()
             system = sio.temps(config["systemsensors"])
-            # Disks are read for the LEDs too (health), even when their
+            # Disks are read for the LEDs and LCD too, even when their
             # temperatures do not drive the fans.
-            disk = disks.get(now) if (config["usedisk"] or panel) else []
+            disk = disks.get(now) \
+                if (config["usedisk"] or panel or lcd) else []
             srcs = sources(config, cpu, system,
                            disk if config["usedisk"] else [])
             pwm = target_pwm(config, srcs, current)
@@ -904,6 +1050,7 @@ def run(config):
             current = pwm
             ok, failed_bays, problems = panel_state(
                 fans, disks, read(MDSTAT_FILE) or "", disk_bays(config["bays"]))
+            bays = bay_info(config["bays"], disk, disks.asleep, failed_bays)
             if problems != problems_before:
                 if problems:
                     log.warning("Status red: %s", "; ".join(problems))
@@ -921,6 +1068,7 @@ def run(config):
                 "fans": fans,
                 "temps": {"cpu": cpu, "system": system, "disk": disk},
                 "problems": problems,
+                "bays": bays,
             }
             if lcd:
                 lcd.update(st)

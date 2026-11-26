@@ -135,6 +135,10 @@
 			"default": 60,
 			"minimum": 0,
 			"maximum": 3600
+		},
+		"lcdpower": {
+			"type": "boolean",
+			"default": true
 		}
 	}
 }
