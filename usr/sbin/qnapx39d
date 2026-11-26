@@ -29,6 +29,10 @@ is green when all is well and red on a failed fan, a failed disk or a
 degraded RAID; a disk's red LED lights when that disk fails; the blue USB
 LED is on while a USB disk is plugged in.
 
+The front LCD (A125, /dev/ttyS1) shows the host name and IP address, the
+status, temperatures, fans, disks and uptime; SELECT and ENTER step
+through the pages.
+
 Commands:
   run        control the fans until stopped (systemd service)
   failsafe   set every controlled fan to full speed and exit
@@ -63,6 +67,12 @@ FAN_FAIL_PWM = 100
 FAN_FAIL_POLLS = 3
 # The status file is stale after this many poll intervals.
 STATUS_STALE_POLLS = 3
+# Front LCD: 2 lines of 16 characters; buttons as the panel reports them.
+LCD_WIDTH = 16
+LCD_ENTER = 1
+LCD_SELECT = 2
+# Seconds between LCD refreshes (and button checks).
+LCD_REFRESH = 1
 
 DEFAULTS = {
     "enable": False,
@@ -82,6 +92,9 @@ DEFAULTS = {
     # Bay N holds the disk on the Nth ATA port listed here (TS-639 Pro,
     # checked by disk activity: bays 1-4 on ata13, ata2-4; 5-6 on ata9-10).
     "bays": "ata13,ata2,ata3,ata4,ata9,ata10",
+    "lcd": True,
+    "lcdport": "/dev/ttyS1",
+    "lcdtimeout": 60,        # backlight off after this many seconds, 0 never
 }
 
 log = logging.getLogger("qnapx39d")
@@ -472,6 +485,264 @@ def panel_state(fans, disks, mdstat, bays):
 
 
 # --------------------------------------------------------------------------
+# Front LCD
+# --------------------------------------------------------------------------
+
+def lcd_text(text):
+    """16 printable ASCII characters."""
+    text = "".join(c if " " <= c <= "~" else "?" for c in str(text))
+    return text[:LCD_WIDTH].ljust(LCD_WIDTH)
+
+
+def parse_buttons(buf):
+    """([buttons pressed], unparsed rest) from bytes read off the LCD.
+
+    The panel sends 53 05 00 bb: bb 01 = ENTER, 02 = SELECT, 00 = release.
+    """
+    pressed = []
+    while True:
+        start = buf.find(b"\x53\x05\x00")
+        if start < 0:
+            # Keep the start of a message cut off by the read.
+            for n in (2, 1):
+                if buf[-n:] == b"\x53\x05\x00"[:n]:
+                    return pressed, buf[-n:]
+            return pressed, b""
+        if len(buf) < start + 4:
+            return pressed, buf[start:]
+        if buf[start + 3]:
+            pressed.append(buf[start + 3])
+        buf = buf[start + 4:]
+
+
+class Lcd:
+    """A125 2x16 front LCD of the TS-639 Pro, on /dev/ttyS1 at 1200 baud.
+
+    GP10 (active-low) powers the panel: the BIOS leaves it at 1 and the
+    LCD dark. Checked on a TS-639 Pro with tools/a125-lcd-*.py; no other
+    program may have the port open (two writers make it flash).
+    """
+
+    POWER = (1, 0)  # GP10
+    BACKLIGHT = b"\x4d\x5e"
+    LINE = b"\x4d\x0c"
+
+    def __init__(self, fd, io=None, base=None):
+        self.fd = fd
+        self.io = io
+        self.base = base
+        self.original = None
+        self.lines = [None, None]
+        self.lit = None
+        self.buf = b""
+
+    @classmethod
+    def open(cls, tty):
+        import termios
+        io = PortIO()
+        with SuperIOConfig(io) as config:
+            chip, base, _ = config.gpio()
+        if chip != 0x8718 or not base:
+            raise OSError("no IT8718F GPIO (chip 0x%04X, base 0x%04X)"
+                          % (chip, base))
+        fd = os.open(tty, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        attrs = termios.tcgetattr(fd)
+        attrs[0] = attrs[1] = attrs[3] = 0
+        attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+        attrs[4] = attrs[5] = termios.B1200
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        termios.tcflush(fd, termios.TCIOFLUSH)
+        lcd = cls(fd, io, base)
+        lcd.power(True)
+        return lcd
+
+    def power(self, on):
+        if self.io is None:
+            return
+        s, bit = self.POWER
+        addr = self.base + s - 1
+        value = self.io.inb(addr)
+        if self.original is None:
+            self.original = value & 1 << bit
+        value = value & ~(1 << bit) if on else value | 1 << bit
+        self.io.outb(addr, value)
+        if on:
+            time.sleep(0.5)  # let the panel start before talking to it
+
+    def write(self, data):
+        while data:
+            try:
+                data = data[os.write(self.fd, data):]
+            except BlockingIOError:
+                time.sleep(0.05)
+
+    def backlight(self, on):
+        if self.lit != on:
+            self.write(self.BACKLIGHT + bytes([1 if on else 0]))
+            self.lit = on
+
+    def show(self, lines):
+        """Write only the lines that changed: 1200 baud is slow."""
+        for n, text in enumerate(lines[:2]):
+            text = lcd_text(text)
+            if self.lines[n] != text:
+                self.write(self.LINE + bytes([n, 0x20]) + text.encode())
+                self.lines[n] = text
+
+    def buttons(self, timeout):
+        """Buttons pressed within `timeout` seconds."""
+        import select
+        ready, _, _ = select.select([self.fd], [], [], timeout)
+        if not ready:
+            return []
+        try:
+            self.buf += os.read(self.fd, 64)
+        except (BlockingIOError, InterruptedError):
+            return []
+        pressed, self.buf = parse_buttons(self.buf)
+        return pressed
+
+    def close(self, message=None):
+        try:
+            if message:
+                self.show(message)
+            self.backlight(False)
+            if self.io is not None and self.original is not None:
+                # Back to how the BIOS left GP10 (normally: panel off).
+                self.power(not self.original)
+        finally:
+            os.close(self.fd)
+
+
+def host_address():
+    """The first global IPv4 address, or None."""
+    try:
+        out = subprocess.run(["ip", "-4", "-o", "addr", "show",
+                              "scope", "global"], capture_output=True,
+                             text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
+    return match.group(1) if match else None
+
+
+def uptime_text():
+    try:
+        seconds = int(float(read("/proc/uptime").split()[0]))
+        load = read("/proc/loadavg").split()[:3]
+    except (AttributeError, IndexError, ValueError):
+        return "", ""
+    days, rest = divmod(seconds, 86400)
+    return ("Up %dd %02d:%02d" % (days, rest // 3600, rest % 3600 // 60),
+            "Load " + " ".join(load))
+
+
+def lcd_pages(status, hostname, address, uptime=("", "")):
+    """The pages SELECT steps through, each two 16-character lines."""
+    pages = [(hostname, address or "no IP address")]
+    problems = status.get("problems") or []
+    if problems:
+        pages.append(("Status: PROBLEM", problems[0]))
+    else:
+        pages.append(("Status: OK", "All well"))
+    temps = status.get("temps") or {}
+    cpu = max((t for _, t in temps.get("cpu") or []), default=None)
+    system = max((t for _, t in temps.get("system") or []), default=None)
+    pages.append(("CPU " + ("%.0fC" % cpu if cpu is not None else "-"),
+                  "System " + ("%.0fC" % system if system is not None
+                               else "-")))
+    fans = status.get("fans") or []
+    duty = status.get("duty")
+    pages.append(("Fans " + ("%d%%" % duty if duty is not None else ""),
+                  " ".join(str(f.get("rpm") if f.get("rpm") is not None
+                               else "-") for f in fans) + " RPM"))
+    disks = [t for _, t in temps.get("disk") or []]
+    if disks:
+        pages.append(("Disks %d, max %.0fC" % (len(disks), max(disks)),
+                      "min %.0fC" % min(disks)))
+    else:
+        pages.append(("Disks", "asleep/no data"))
+    if any(uptime):
+        pages.append(uptime)
+    return pages
+
+
+class LcdPanel:
+    """Shows the daemon's status on the LCD; SELECT next page, ENTER
+    previous page. Any button lights the backlight, which goes off after
+    `timeout` seconds without a press (0 = always on). A new problem
+    lights it and jumps to the Status page."""
+
+    STATUS_PAGE = 1
+
+    def __init__(self, lcd, timeout, clock=time.monotonic):
+        self.lcd = lcd
+        self.timeout = timeout
+        self.clock = clock
+        self.page = 0
+        self.touched = clock()
+        self.status = {}
+        self.problems = []
+        self.hostname = os.uname().nodename
+        self.address = None
+        self.address_time = None
+        self.stopping = False
+
+    def update(self, status):
+        """Called by the fan loop with each new status."""
+        problems = status.get("problems") or []
+        if problems and problems != self.problems:
+            self.page = self.STATUS_PAGE
+            self.touched = self.clock()
+        self.problems = problems
+        self.status = status
+
+    def press(self, button):
+        if self.lcd.lit is False:
+            pass  # the first press only wakes the panel
+        elif button == LCD_SELECT:
+            self.page += 1
+        elif button == LCD_ENTER:
+            self.page -= 1
+        self.touched = self.clock()
+
+    def refresh(self):
+        now = self.clock()
+        if self.address_time is None or now - self.address_time > 60:
+            self.address = host_address()
+            self.address_time = now
+        pages = lcd_pages(self.status, self.hostname, self.address,
+                          uptime_text())
+        self.page %= len(pages)
+        self.lcd.backlight(not self.timeout or
+                           now - self.touched < self.timeout)
+        self.lcd.show(pages[self.page])
+
+    def loop(self):
+        self.lcd.backlight(True)
+        while not self.stopping:
+            try:
+                for button in self.lcd.buttons(LCD_REFRESH):
+                    self.press(button)
+                self.refresh()
+            except OSError as e:
+                log.error("LCD: %s", e)
+                time.sleep(LCD_REFRESH)
+
+    def start(self):
+        import threading
+        thread = threading.Thread(target=self.loop, name="lcd", daemon=True)
+        thread.start()
+        return thread
+
+    def stop(self, thread=None):
+        self.stopping = True
+        if thread:
+            thread.join(LCD_REFRESH + 2)
+        self.lcd.close(("openmediavault", "qnapx39d stopped"))
+
+
+# --------------------------------------------------------------------------
 # Fan curve
 # --------------------------------------------------------------------------
 
@@ -531,9 +802,9 @@ def load_config(path=None):
         log.warning("Using defaults, cannot read %s: %s", path, e)
     for key in ("interval", "manualpwm", "minpwm", "maxpwm", "hysteresis",
                 "cpulow", "cpuhigh", "syslow", "syshigh", "disklow",
-                "diskhigh", "diskinterval"):
+                "diskhigh", "diskinterval", "lcdtimeout"):
         config[key] = int(config[key])
-    for key in ("enable", "usecpu", "usesystem", "usedisk", "leds"):
+    for key in ("enable", "usecpu", "usesystem", "usedisk", "leds", "lcd"):
         config[key] = bool(config[key])
     config["fans"] = parse_list(config["fans"], int)
     config["systemsensors"] = parse_list(config["systemsensors"])
@@ -585,6 +856,14 @@ def run(config):
             panel = FrontPanel.open()
         except OSError as e:
             log.warning("Front panel LEDs disabled: %s", e)
+    lcd = lcd_thread = None
+    if config["lcd"]:
+        try:
+            lcd = LcdPanel(Lcd.open(config["lcdport"]), config["lcdtimeout"])
+            lcd_thread = lcd.start()
+        except OSError as e:
+            log.warning("Front LCD disabled: %s", e)
+            lcd = None
     disks = DiskTemps(config["diskinterval"])
     current = None
     zero_rpm = {n: 0 for n in config["fans"]}
@@ -636,13 +915,16 @@ def run(config):
                     panel.show(ok, failed_bays, usb_disk_present())
                 except OSError as e:
                     log.error("Failed to set the LEDs: %s", e)
-            write_status({
+            st = {
                 "time": now, "interval": config["interval"],
                 "pwm": pwm, "duty": round(pwm * 100 / PWM_MAX),
                 "fans": fans,
                 "temps": {"cpu": cpu, "system": system, "disk": disk},
                 "problems": problems,
-            })
+            }
+            if lcd:
+                lcd.update(st)
+            write_status(st)
             time.sleep(config["interval"])
     except Stop:
         log.info("Stopping")
@@ -653,6 +935,11 @@ def run(config):
                 panel.restore()
             except OSError as e:
                 log.error("Failed to restore the LEDs: %s", e)
+        if lcd:
+            try:
+                lcd.stop(lcd_thread)
+            except OSError as e:
+                log.error("Failed to switch the LCD off: %s", e)
     return 0
 
 

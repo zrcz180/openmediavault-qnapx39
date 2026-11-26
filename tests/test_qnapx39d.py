@@ -95,7 +95,7 @@ class FakeSysfs(unittest.TestCase):
 
         real_sleep, d.time.sleep = d.time.sleep, sleep
         try:
-            d.run(config(usedisk=False, leds=False))
+            d.run(config(usedisk=False, leds=False, lcd=False))
         finally:
             d.time.sleep = real_sleep
         # Board at 40 C is below 45 C and CPU 28 C: lowest speed.
@@ -267,3 +267,110 @@ class Collectd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FrontLcd(unittest.TestCase):
+    def setUp(self):
+        self.r, self.w = os.pipe()
+        self.io = FakeIO([0xED, 0x0F, 0x9F, 0x7B, 0xFD])
+        self.lcd = d.Lcd(self.w, self.io, 0xA20)
+        self.now = [0.0]
+        d.time.sleep, self.real_sleep = (lambda s: None), d.time.sleep
+
+    def tearDown(self):
+        d.time.sleep = self.real_sleep
+        os.close(self.r)
+        try:
+            os.close(self.w)
+        except OSError:
+            pass
+
+    def sent(self):
+        os.set_blocking(self.r, False)
+        try:
+            return os.read(self.r, 4096)
+        except BlockingIOError:
+            return b""
+
+    def test_parse_buttons(self):
+        self.assertEqual(d.parse_buttons(b"\x53\x05\x00\x01\x53\x05\x00\x00"),
+                         ([1], b""))
+        self.assertEqual(d.parse_buttons(b"xx\x53\x05\x00\x02\x53\x05"),
+                         ([2], b"\x53\x05"))
+        self.assertEqual(d.parse_buttons(b"\x53\x05\x00"), ([], b"\x53\x05\x00"))
+        self.assertEqual(d.parse_buttons(b"junk"), ([], b""))
+
+    def test_power_backlight_and_lines(self):
+        self.lcd.power(True)
+        self.assertEqual(self.io.ports[0xA20] & 1, 0)   # GP10 low: on
+        self.lcd.backlight(True)
+        self.lcd.backlight(True)                         # sent once
+        self.lcd.show(("nas", "10.0.0.2"))
+        self.lcd.show(("nas", "10.0.0.3"))               # only line 2
+        self.assertEqual(
+            self.sent(),
+            b"\x4d\x5e\x01"
+            b"\x4d\x0c\x00\x20nas             "
+            b"\x4d\x0c\x01\x2010.0.0.2        "
+            b"\x4d\x0c\x01\x2010.0.0.3        ")
+        self.lcd.close(("bye", ""))
+        self.assertEqual(self.io.ports[0xA20], 0xED)    # GP10 back to 1
+
+    def test_text_is_ascii_16(self):
+        self.assertEqual(d.lcd_text("Temperatura 40°C!!"), "Temperatura 40?C")
+
+    def test_pages(self):
+        st = {"duty": 30, "problems": [],
+              "fans": [{"name": "fan1", "rpm": 1715}, {"name": "fan2",
+                                                       "rpm": 1713}],
+              "temps": {"cpu": [("Core 0", 28.0)],
+                        "system": [("temp1", 40.0), ("temp2", 38.0)],
+                        "disk": [("sdb", 35.0), ("sdc", 38.0)]}}
+        pages = d.lcd_pages(st, "nas", "192.168.1.5", ("Up 1d 02:03", "L"))
+        self.assertEqual(pages, [
+            ("nas", "192.168.1.5"), ("Status: OK", "All well"),
+            ("CPU 28C", "System 40C"), ("Fans 30%", "1715 1713 RPM"),
+            ("Disks 2, max 38C", "min 35C"), ("Up 1d 02:03", "L")])
+        for line in sum(map(list, pages), []):
+            self.assertLessEqual(len(line), 16)
+        pages = d.lcd_pages({"problems": ["fan1 failed"]}, "nas", None)
+        self.assertEqual(pages[1], ("Status: PROBLEM", "fan1 failed"))
+        self.assertEqual(pages[0][1], "no IP address")
+
+    def test_buttons_pages_and_backlight_timeout(self):
+        panel = d.LcdPanel(self.lcd, 60, clock=lambda: self.now[0])
+        panel.address_time = 0
+        panel.update({"problems": []})
+        panel.refresh()
+        self.assertEqual(panel.page, 0)
+        self.assertTrue(self.lcd.lit)
+        panel.press(d.LCD_SELECT)
+        panel.refresh()
+        self.assertEqual(panel.page, 1)
+        panel.press(d.LCD_ENTER)
+        panel.press(d.LCD_ENTER)
+        panel.refresh()
+        self.assertEqual(panel.page, len(d.lcd_pages({}, "", "",
+                                                     d.uptime_text())) - 1)
+        self.now[0] = 59.0
+        panel.address_time = 59.0
+        panel.refresh()
+        self.assertTrue(self.lcd.lit)
+        self.now[0] = 61.0
+        panel.refresh()
+        self.assertFalse(self.lcd.lit)
+        page = panel.page
+        panel.press(d.LCD_SELECT)        # first press only wakes
+        panel.refresh()
+        self.assertTrue(self.lcd.lit)
+        self.assertEqual(panel.page, page)
+        # A new problem jumps to the Status page and lights the panel.
+        self.now[0] = 200.0
+        panel.address_time = 200.0
+        panel.refresh()
+        self.assertFalse(self.lcd.lit)
+        panel.update({"problems": ["RAID degraded"]})
+        panel.refresh()
+        self.assertTrue(self.lcd.lit)
+        self.assertEqual(panel.page, d.LcdPanel.STATUS_PAGE)
+        self.assertEqual(self.lcd.lines[1], d.lcd_text("RAID degraded"))

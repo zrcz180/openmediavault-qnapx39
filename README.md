@@ -23,6 +23,10 @@ por isso aquele plugin não serve. Este usa o driver `it87` do kernel.
   com uma ventoinha avariada, um disco avariado (S.M.A.R.T. ou RAID) ou um
   RAID degradado; o LED vermelho da baía do disco avariado acende; o LED
   USB fica azul enquanto houver um disco USB ligado.
+- Ecrã LCD da frente (fase 2): nome e IP, estado, temperaturas,
+  ventoinhas, discos e tempo ligado. SELECT mostra a página seguinte e
+  ENTER a anterior. A luz apaga ao fim de um tempo sem carregar num botão
+  (0 = sempre acesa) e volta a acender com um problema novo.
 
 ## TS-639 Pro (verificado)
 
@@ -51,6 +55,13 @@ quando o serviço para.
 Baías 1 a 6 = portas ata13, ata2, ata3, ata4, ata9, ata10 (verificado pela
 atividade de cada disco). A porta ata1 não é uma baía.
 
+LCD: A125 (2 linhas de 16) em `/dev/ttyS1`, 1200 baud 8N1, ligado pelo
+GP10 (ativo a 0; o BIOS deixa-o a 1 e o ecrã apagado). Comandos:
+`4D 5E 01`/`00` acende/apaga a luz, `4D 0C <linha> 20` + 16 caracteres
+escreve uma linha. Os botões enviam `53 05 00 01` (ENTER), `53 05 00 02`
+(SELECT) e `53 05 00 00` (largar). Nenhum outro programa pode ter a
+`/dev/ttyS1` aberta, senão o ecrã pisca.
+
 `tools/it8718-gpio-dump.py` (só leitura)
 e `tools/it8718-gpio-probe.py` ajudam a mapear outros modelos.
 
@@ -67,7 +78,6 @@ Sistema > QNAP > Fan control, ativar, Guardar e Aplicar.
 
 ## Ainda por fazer
 
-- Fase 2: ecrã LCD (A125 em `/dev/ttyS1`, 1200 baud) e os seus botões.
 - Botões Reset/USB Copy (entradas GP16, GP17, GP24, GP25, GP40,
   GP53 por mapear).
 

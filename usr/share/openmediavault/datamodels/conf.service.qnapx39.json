@@ -125,6 +125,16 @@
 			"type": "string",
 			"default": "ata13,ata2,ata3,ata4,ata9,ata10",
 			"pattern": "^ata[0-9]+(,ata[0-9]+){0,5}$"
+		},
+		"lcd": {
+			"type": "boolean",
+			"default": true
+		},
+		"lcdtimeout": {
+			"type": "integer",
+			"default": 60,
+			"minimum": 0,
+			"maximum": 3600
 		}
 	}
 }
