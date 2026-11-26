@@ -44,6 +44,9 @@ LEDs (pinos GPIO da IT8718F, Simple I/O em 0x0A20, todos ativos a 0):
 | GP34 | Status vermelho |
 | GP50 | USB (azul) |
 
+Baías 1 a 6 = portas ata13, ata2, ata3, ata4, ata9, ata10 (verificado pela
+atividade de cada disco). A porta ata1 não é uma baía.
+
 `tools/it8718-gpio-dump.py` (só leitura)
 e `tools/it8718-gpio-probe.py` ajudam a mapear outros modelos.
 

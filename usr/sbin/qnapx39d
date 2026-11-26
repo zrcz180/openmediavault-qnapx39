@@ -79,8 +79,9 @@ DEFAULTS = {
     "diskinterval": 300,
     "fans": "1,2",           # pwmN drives fanN on the TS-639 Pro
     "leds": True,
-    # Bay N holds the disk on the Nth ATA port listed here.
-    "bays": "ata1,ata2,ata3,ata4,ata5,ata6",
+    # Bay N holds the disk on the Nth ATA port listed here (TS-639 Pro,
+    # checked by disk activity: bays 1-4 on ata13, ata2-4; 5-6 on ata9-10).
+    "bays": "ata13,ata2,ata3,ata4,ata9,ata10",
 }
 
 log = logging.getLogger("qnapx39d")

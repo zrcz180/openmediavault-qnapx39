@@ -258,7 +258,7 @@ data:
       - type: textInput
         name: bays
         label: _("ATA port of each bay")
-        value: "ata1,ata2,ata3,ata4,ata5,ata6"
+        value: "ata13,ata2,ata3,ata4,ata9,ata10"
         hint: _("Bay 1 first. The port is in the path shown by ls -l /sys/block/sda")
         validators:
           required: true
