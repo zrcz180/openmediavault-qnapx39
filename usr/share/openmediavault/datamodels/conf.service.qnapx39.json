@@ -116,6 +116,15 @@
 		"loadmodule": {
 			"type": "boolean",
 			"default": true
+		},
+		"leds": {
+			"type": "boolean",
+			"default": true
+		},
+		"bays": {
+			"type": "string",
+			"default": "ata13,ata2,ata3,ata4,ata9,ata10",
+			"pattern": "^ata[0-9]+(,ata[0-9]+){0,5}$"
 		}
 	}
 }

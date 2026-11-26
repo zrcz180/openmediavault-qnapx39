@@ -1,3 +1,22 @@
+openmediavault-qnapx39 (7.1.1) stable; urgency=low
+
+  * Add the LED settings (leds, bays) to an existing configuration on
+    upgrade; without them the LED options were missing after updating
+    from 7.0.0.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 14:35:39 -0000
+
+openmediavault-qnapx39 (7.1.0) stable; urgency=low
+
+  * Front panel LEDs on the TS-639 Pro (IT8718F GPIO): Status solid green
+    when all is well, red on a failed fan, a failed disk or a degraded
+    RAID; the failed disk's bay LED lights red; the USB LED is blue while
+    a USB disk is plugged in. The BIOS state is put
+    back when the service stops.
+  * Tools to dump and probe the IT8718F GPIO pins on other models.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 13:27:13 -0000
+
 openmediavault-qnapx39 (7.0.0) stable; urgency=low
 
   * First release: fan control for the QNAP TS-639 Pro (IT8718F, it87)

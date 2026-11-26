@@ -101,6 +101,16 @@ class OMVRpcServiceQnapx39 extends \OMV\Rpc\ServiceAbstract
 				gettext("Not running"),
 			"unit" => ""
 		];
+		if (!empty($status["running"])) {
+			$problems = $status["problems"] ?? [];
+			$rows[] = [
+				"kind" => gettext("Status LED"),
+				"label" => empty($problems) ? gettext("Green") : gettext("Red"),
+				"value" => empty($problems) ? gettext("All well") :
+					implode("; ", $problems),
+				"unit" => ""
+			];
+		}
 		foreach ($status["fans"] ?? [] as $fan) {
 			$rows[] = [
 				"kind" => gettext("Fan"),

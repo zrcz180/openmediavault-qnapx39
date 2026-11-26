@@ -19,6 +19,10 @@ por isso aquele plugin não serve. Este usa o driver `it87` do kernel.
 - Página Sistema > QNAP (configuração e estado), indicadores no painel e
   gráficos em Diagnóstico > Estatísticas de desempenho.
 - Carrega o `it87` no arranque.
+- LEDs do painel (fase 3): Status verde fixo quando está tudo bem, vermelho
+  com uma ventoinha avariada, um disco avariado (S.M.A.R.T. ou RAID) ou um
+  RAID degradado; o LED vermelho da baía do disco avariado acende; o LED
+  USB fica azul enquanto houver um disco USB ligado.
 
 ## TS-639 Pro (verificado)
 
@@ -29,6 +33,26 @@ por isso aquele plugin não serve. Este usa o driver `it87` do kernel.
 | pwm3 | não ligado |
 
 O BIOS deixa as duas ventoinhas em modo manual a 50 %.
+
+LEDs (pinos GPIO da IT8718F, Simple I/O em 0x0A20, todos ativos a 0):
+
+| Pino | LED |
+| --- | --- |
+| GP23, GP22, GP21, GP20 | vermelho das baías 1, 2, 3, 4 |
+| GP31, GP30 | vermelho das baías 5, 6 |
+| GP35 | Status verde |
+| GP34 | Status vermelho |
+| GP50 | USB (azul) |
+
+O BIOS faz piscar o Status com o gerador de pisca 1 ligado ao GP26 (código
+0x16). O plugin desliga esse pisca e o Status fica fixo; volta a piscar
+quando o serviço para.
+
+Baías 1 a 6 = portas ata13, ata2, ata3, ata4, ata9, ata10 (verificado pela
+atividade de cada disco). A porta ata1 não é uma baía.
+
+`tools/it8718-gpio-dump.py` (só leitura)
+e `tools/it8718-gpio-probe.py` ajudam a mapear outros modelos.
 
 ## Construir
 
@@ -44,7 +68,8 @@ Sistema > QNAP > Fan control, ativar, Guardar e Aplicar.
 ## Ainda por fazer
 
 - Fase 2: ecrã LCD (A125 em `/dev/ttyS1`, 1200 baud) e os seus botões.
-- Fase 3: LEDs e botão USB Copy (GPIO da IT8718, mapa por descobrir).
+- Botões Reset/USB Copy (entradas GP16, GP17, GP24, GP25, GP40,
+  GP53 por mapear).
 
 ## Licença
 
