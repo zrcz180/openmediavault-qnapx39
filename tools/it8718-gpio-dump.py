@@ -54,9 +54,15 @@ def main():
         pull = [reg(0xB8 + i) for i in range(5)]
         simple = [reg(0xC0 + i) for i in range(5)]
         outen = [reg(0xC8 + i) for i in range(5)]
+        # Hardware LED blink: pin location (set << 3 | bit) and control.
+        blink = [(reg(0xF8), reg(0xF9)), (reg(0xFA), reg(0xFB))]
         io.outb(idx, 0x02)
         io.outb(idx + 1, 0x02)                          # leave config mode
         print("Simple I/O base: 0x%04X" % base)
+        for n, (loc, ctl) in enumerate(blink, 1):
+            where = "GP%d%d" % (loc >> 3 & 7, loc & 7) if loc else "none"
+            print("LED blink %d: pin %s (location 0x%02X, control 0x%02X)"
+                  % (n, where, loc, ctl))
         vals = [io.inb(base + i) if base else None for i in range(5)]
         print()
         print("pin   gpio  simple  dir  inverted  pullup  value")
