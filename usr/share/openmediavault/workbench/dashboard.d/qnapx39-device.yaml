@@ -1,0 +1,23 @@
+version: "1.0"
+type: dashboard-widget
+data:
+  id: 5a278d93-90b2-4d61-9561-1b4ca9a193d9
+  type: datatable
+  title: _("QNAP device")
+  description: _("Processor, board, kernel, plugin version and hardware state.")
+  permissions:
+    role:
+      - admin
+  datatable:
+    columns:
+      - name: _("Property")
+        prop: property
+        flexGrow: 1
+      - name: _("Value")
+        prop: value
+        flexGrow: 2
+    store:
+      proxy:
+        service: Qnapx39
+        get:
+          method: getDevice

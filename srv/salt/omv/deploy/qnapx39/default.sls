@@ -6,6 +6,14 @@
 # later version. See the LICENSE file for details.
 
 {% set config = salt['omv_conf.get']('conf.service.qnapx39') %}
+# Fault emails: OMV email on and the "qnapx39" event ticked (a never-saved
+# event shows as unticked, so it is off until saved).
+{% set email_config = salt['omv_conf.get']('conf.system.notification.email') %}
+{% set notification = salt['omv_conf.get_by_filter'](
+  'conf.system.notification.notification',
+  {'operator': 'stringEquals', 'arg0': 'id', 'arg1': 'qnapx39'}) %}
+{% set notify = (email_config.enable | to_bool) and
+  (notification | length > 0 and notification[0].enable | to_bool) %}
 
 # The IT8718F is driven by the in-kernel it87 driver; Debian does not load
 # it on its own.
@@ -63,6 +71,7 @@ configure_qnapx39d:
         lcd: {{ config.lcd | to_bool | json }}
         lcdtimeout: {{ config.lcdtimeout }}
         lcdpower: {{ config.lcdpower | to_bool | json }}
+        notify: {{ notify | json }}
     - serializer: json
     - makedirs: True
     - user: root

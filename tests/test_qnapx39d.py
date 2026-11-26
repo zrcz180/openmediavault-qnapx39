@@ -576,3 +576,61 @@ class Volumes(unittest.TestCase):
         self.assertEqual([d.bytes_text(n) for n in (0, 999, 1.2e12, 4e9,
                                                     15e12)],
                          ["0B", "999B", "1.2T", "4.0G", "15T"])
+
+
+class Notifications(unittest.TestCase):
+    def test_mail_after_a_minute_and_when_cleared(self):
+        sent = []
+        n = d.Notifier(True, mail=lambda subject, body: sent.append(subject))
+        n.update(["fan1 failed"], 0)
+        n.update(["fan1 failed"], 30)
+        self.assertEqual(sent, [])
+        n.update(["fan1 failed", "RAID degraded"], 60)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("fan1 failed", sent[0])
+        n.update(["fan1 failed", "RAID degraded"], 90)   # no repeat
+        self.assertEqual(len(sent), 1)
+        n.update(["fan1 failed", "RAID degraded"], 125)
+        self.assertIn("RAID degraded", sent[1])
+        n.update([], 130)
+        self.assertIn("back to normal", sent[2])
+
+    def test_glitch_sends_nothing_and_off_sends_nothing(self):
+        sent = []
+        n = d.Notifier(True, mail=lambda s, b: sent.append(s))
+        n.update(["fan1 failed"], 0)
+        n.update([], 10)
+        n.update([], 100)
+        self.assertEqual(sent, [])
+        off = d.Notifier(False, mail=lambda s, b: sent.append(s))
+        off.update(["fan1 failed"], 0)
+        off.update(["fan1 failed"], 100)
+        self.assertEqual(sent, [])
+        self.assertEqual(off.reported, {"fan1 failed"})
+
+    def test_extra_problems(self):
+        srcs = [("cpu", 96.0, 60, 85), ("sys", 50.0, 45, 60),
+                ("disk", 60.0, 38, 50)]
+        vols = [("data", 96, 1, 100), ("backup", 50, 50, 100)]
+        self.assertEqual(d.extra_problems(srcs, vols),
+                         ["CPU temperature critical",
+                          "disk temperature critical", "volume data full"])
+
+    def test_failsafe_mails_only_after_a_crash(self):
+        sent = []
+        real = d.send_mail
+        d.send_mail = lambda s, b: sent.append(s)
+        real_find, d.SuperIO.find = d.SuperIO.find, classmethod(
+            lambda cls: None)
+        try:
+            for result in ("success", "exit-code"):
+                os.environ["SERVICE_RESULT"] = result
+                d.failsafe(config(notify=True))
+            os.environ["SERVICE_RESULT"] = "signal"
+            d.failsafe(config(notify=False))
+        finally:
+            os.environ.pop("SERVICE_RESULT", None)
+            d.send_mail = real
+            d.SuperIO.find = real_find
+        self.assertEqual(len(sent), 1)
+        self.assertIn("stopped unexpectedly", sent[0])

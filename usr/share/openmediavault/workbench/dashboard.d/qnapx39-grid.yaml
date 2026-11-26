@@ -1,0 +1,21 @@
+version: "1.0"
+type: dashboard-widget
+data:
+  id: 2675d468-f775-4d16-8955-84967caecb79
+  type: grid
+  reloadPeriod: 10000
+  permissions:
+    role:
+      - admin
+  title: _("QNAP fans & temperatures")
+  description: _("Fan speeds and temperatures read by the QNAP TS-x39 plugin.")
+  grid:
+    item:
+      content: '{{ label }}<br>{{ value }} {{ unit }}'
+      class: 'omv-text-center omv-text-nowrap omv-background-color-muted'
+      tooltip: '{{ kind }}'
+    store:
+      proxy:
+        service: Qnapx39
+        get:
+          method: getStatus
