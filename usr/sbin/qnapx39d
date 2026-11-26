@@ -26,7 +26,8 @@ leaves both in manual mode at 50 %, whatever the temperature.
 The front panel LEDs are IT8718F GPIO pins, written through the chip's
 Simple I/O ports (mapped on a TS-639 Pro, all active-low): the Status LED
 is green when all is well and red on a failed fan, a failed disk or a
-degraded RAID; a disk's red LED lights when that disk fails.
+degraded RAID; a disk's red LED lights when that disk fails; the blue USB
+LED is on while a USB disk is plugged in.
 
 Commands:
   run        control the fans until stopped (systemd service)
@@ -371,6 +372,7 @@ class FrontPanel:
 
     STATUS_GREEN = (3, 5)   # GP35
     STATUS_RED = (3, 4)     # GP34
+    USB = (5, 0)            # GP50, blue
     DISK_RED = {1: (2, 3), 2: (2, 2), 3: (2, 1), 4: (2, 0),
                 5: (3, 1), 6: (3, 0)}
 
@@ -379,7 +381,7 @@ class FrontPanel:
         self.base = base
         self.config = config  # SuperIOConfig, to stop hardware blinking
         self.blink = list(blink)
-        pins = [self.STATUS_GREEN, self.STATUS_RED] + \
+        pins = [self.STATUS_GREEN, self.STATUS_RED, self.USB] + \
             list(self.DISK_RED.values())
         self.original = {s: self.io.inb(base + s - 1)
                          for s in {s for s, _ in pins}}
@@ -419,10 +421,11 @@ class FrontPanel:
                     self.config.reg(0x07, SuperIOConfig.LDN_GPIO)
                     self.config.reg(0xF8 + 2 * n, 0)
 
-    def show(self, ok, failed_bays):
+    def show(self, ok, failed_bays, usb=False):
         self.stop_blink(self.STATUS_GREEN)
         self.set(self.STATUS_GREEN, ok)
         self.set(self.STATUS_RED, not ok)
+        self.set(self.USB, usb)
         for bay, pin in self.DISK_RED.items():
             self.set(pin, bay in failed_bays)
 
@@ -437,6 +440,12 @@ class FrontPanel:
                 self.config.reg(0x07, SuperIOConfig.LDN_GPIO)
                 for n, loc in enumerate(self.blink):
                     self.config.reg(0xF8 + 2 * n, loc)
+
+
+def usb_disk_present():
+    """True while a USB disk is plugged in."""
+    return any(re.search(r"/usb\d+/", os.path.realpath(path))
+               for path in glob.glob(sysfs("block", "sd*")))
 
 
 def panel_state(fans, disks, mdstat, bays):
@@ -616,7 +625,7 @@ def run(config):
                 problems_before = problems
             if panel:
                 try:
-                    panel.show(ok, failed_bays)
+                    panel.show(ok, failed_bays, usb_disk_present())
                 except OSError as e:
                     log.error("Failed to set the LEDs: %s", e)
             write_status({

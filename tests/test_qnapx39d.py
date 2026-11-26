@@ -206,13 +206,21 @@ class Leds(unittest.TestCase):
         self.assertEqual(self.pin(3, 0), 0)   # bay 6 = GP30
         self.assertEqual(self.pin(2, 2), 1)
 
+    def test_usb_led(self):
+        self.panel.show(True, set(), usb=True)
+        self.assertEqual(self.pin(5, 0), 0)   # GP50 on
+        self.assertEqual(self.io.ports[0xA24] | 1, 0xFD | 1)
+        self.panel.show(True, set(), usb=False)
+        self.assertEqual(self.pin(5, 0), 1)
+
     def test_other_pins_untouched_and_restore(self):
-        self.panel.show(False, {1, 2, 3, 4, 5, 6})
+        self.panel.show(False, {1, 2, 3, 4, 5, 6}, usb=True)
         self.assertEqual(self.io.ports[0xA22] & 0x0C, 0x9F & 0x0C)  # GP32/33
         self.assertEqual(self.io.ports[0xA20], 0xED)
         self.panel.restore()
         self.assertEqual(self.io.ports[0xA21], 0x0F)
         self.assertEqual(self.io.ports[0xA22], 0x9F)
+        self.assertEqual(self.io.ports[0xA24], 0xFD)
         self.assertEqual(self.io.config[0xF8], 0x1D)
 
     def test_panel_state(self):

@@ -2,7 +2,8 @@ openmediavault-qnapx39 (7.1.0) stable; urgency=low
 
   * Front panel LEDs on the TS-639 Pro (IT8718F GPIO): Status solid green
     when all is well, red on a failed fan, a failed disk or a degraded
-    RAID; the failed disk's bay LED lights red. The BIOS state is put
+    RAID; the failed disk's bay LED lights red; the USB LED is blue while
+    a USB disk is plugged in. The BIOS state is put
     back when the service stops.
   * Tools to dump and probe the IT8718F GPIO pins on other models.
 

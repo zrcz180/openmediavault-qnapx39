@@ -254,7 +254,7 @@ data:
         name: leds
         label: _("Control the front panel LEDs")
         value: true
-        hint: _("Status turns solid green when all is well and red on a failed fan, a failed disk or a degraded RAID. A failed disk's red LED lights up. When the service stops, the LEDs go back to how the BIOS left them.")
+        hint: _("Status turns solid green when all is well and red on a failed fan, a failed disk or a degraded RAID. A failed disk's red LED lights up, and USB is blue while a USB disk is plugged in. When the service stops, the LEDs go back to how the BIOS left them.")
       - type: textInput
         name: bays
         label: _("ATA port of each bay")
