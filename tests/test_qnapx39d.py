@@ -87,7 +87,8 @@ class FakeSysfs(unittest.TestCase):
         polls = []
 
         def sleep(seconds):
-            polls.append(json.load(open(d.STATUS_FILE)))
+            with open(d.STATUS_FILE) as f:
+                polls.append(json.load(f))
             raise d.Stop()
 
         real_sleep, d.time.sleep = d.time.sleep, sleep
