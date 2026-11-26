@@ -72,8 +72,8 @@ def main():
     finally:
         if not keep:
             os.lseek(port, ADDR, os.SEEK_SET)
-            os.write(port, bytes([before]))
-            print("GP10 restored.")
+            os.write(port, bytes([before | (1 << BIT)]))  # GP10 is 1 at boot
+            print("GP10 back to 1 (boot value).")
         else:
             print("GP10 left at 0. Run again and answer N to restore.")
 
