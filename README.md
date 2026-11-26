@@ -5,10 +5,17 @@ a funcionar o hardware da frente e as ventoinhas dos QNAP antigos com
 Intel Atom e Super I/O ITE IT8718F (série TS-x39, como o TS-639 Pro),
 incluindo instalações **i386** (32 bits).
 
-Estes modelos não têm o controlador IT8528 usado pelo
-[openmediavault-qnap](https://github.com/nader-eloshaiker/omv-qnap-plugin),
-por isso aquele plugin não serve aqui. Este usa o driver `it87` do kernel,
-os pinos GPIO da IT8718F e a porta série do ecrã.
+> **Baseado no [omv-qnap-plugin](https://github.com/nader-eloshaiker/omv-qnap-plugin)**
+> de Nader Eloshaiker (GPL-3.0-or-later). Este projeto é um derivado
+> (fork) desse plugin, adaptado ao OpenMediaVault 7 i386 e ao hardware da
+> série TS-x39.
+
+O plugin original foi feito para os QNAP com o controlador IT8528 e para
+o OpenMediaVault 8 (amd64/arm64). Estes modelos não têm esse controlador,
+por isso aqui o acesso ao hardware foi refeito: usa o driver `it87` do
+kernel, os pinos GPIO da IT8718F e a porta série do ecrã. Do original
+vêm a estrutura do plugin (Salt, páginas da interface, painel, gráficos),
+o leitor de temperaturas dos discos e os emails de avaria.
 
 Versão atual: **7.3.0** (OpenMediaVault 7, Debian 12 "bookworm").
 
@@ -171,5 +178,8 @@ O GitHub Actions corre os testes e constrói o .deb em cada push.
 
 ## Licença
 
-GPL-3.0-or-later. O leitor de temperaturas dos discos foi adaptado do
-openmediavault-qnap (Nader Eloshaiker, GPL-3.0-or-later).
+GPL-3.0-or-later, a mesma licença do original.
+
+Baseado no [omv-qnap-plugin](https://github.com/nader-eloshaiker/omv-qnap-plugin)
+© Nader Eloshaiker, GPL-3.0-or-later. O leitor de temperaturas dos discos
+e os emails de avaria foram adaptados desse projeto.
