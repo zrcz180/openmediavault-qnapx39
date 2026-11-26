@@ -6,16 +6,24 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: i386/debian:bookworm
     steps:
-      - name: Install build tools
+      - uses: actions/checkout@v4
+      # Test and build inside Debian 12 i386, the NAS's own system. Host
+      # networking: as a job container, i386/debian:bookworm could not
+      # resolve deb.debian.org on the runner.
+      - name: Test and build on Debian 12 i386
         run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends build-essential debhelper fakeroot python3 git ca-certificates
-      # actions/checkout needs a 64-bit node, so clone by hand.
-      - name: Check out
-        run: git clone --depth 1 --branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" "https://github.com/${GITHUB_REPOSITORY}.git" src
-      - name: Test
-        run: cd src && python3 -m unittest discover -s tests -v
-      - name: Build
-        run: cd src && dpkg-buildpackage -us -uc -b && cp ../*.deb .
+          mkdir -p dist
+          docker run --rm --network host --platform linux/386 \
+            -v "$PWD":/src:ro -v "$PWD/dist":/dist i386/debian:bookworm sh -ec '
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends build-essential debhelper fakeroot python3 >/dev/null
+              cp -r /src /build && cd /build
+              python3 -m unittest discover -s tests -v
+              dpkg-buildpackage -us -uc -b
+              cp ../*.deb /dist/'
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
