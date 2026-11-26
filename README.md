@@ -10,7 +10,7 @@ Estes modelos não têm o controlador IT8528 usado pelo
 por isso aquele plugin não serve aqui. Este usa o driver `it87` do kernel,
 os pinos GPIO da IT8718F e a porta série do ecrã.
 
-Versão atual: **7.2.4** (OpenMediaVault 7, Debian 12 "bookworm").
+Versão atual: **7.3.0** (OpenMediaVault 7, Debian 12 "bookworm").
 
 ## O que está incorporado
 
@@ -65,18 +65,29 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
   escolhe e ENTER confirma; é preciso um segundo ENTER em "Sure?". SELECT,
   ou 15 s sem carregar, cancela. Pode ser desativado.
 
-### Interface web
+### Interface web e avisos
 
 - **Sistema > QNAP > Fan control**: ventoinhas, temperaturas, LEDs, mapa
   das baías e ecrã LCD.
 - **Sistema > QNAP > Status**: leituras atuais e estado do LED.
-- Indicadores no painel inicial (CPU, sistema, discos, potência das
-  ventoinhas).
-- Gráficos em Diagnóstico > Estatísticas de desempenho.
+- **Sistema > QNAP > Disks**: cada baía com o disco, modelo, tamanho,
+  temperatura, estado e LED vermelho.
+- Painel inicial: quadro com as ventoinhas e temperaturas, dados do
+  equipamento, gráficos do último dia e indicadores redondos (CPU,
+  sistema, discos, potência das ventoinhas).
+- Gráficos em Diagnóstico > Estatísticas de desempenho (hora, dia,
+  semana, mês e ano).
+- **Emails de avaria** pelas notificações do OMV: ventoinha parada,
+  temperatura crítica (10 °C acima do máximo), disco avariado, RAID
+  degradado ou volume cheio (95 %) durante mais de 1 minuto, quando o
+  problema passa, e quando o serviço para sem ser pedido. Para ligar:
+  Sistema > Notificação > Definições com o email configurado, e em
+  Eventos marcar "QNAP TS-x39 hardware" e Guardar. Uma temperatura
+  crítica ou um volume cheio também põem o Status vermelho.
 
 ## Instalar
 
-1. Descarregar o `openmediavault-qnapx39_7.2.4_all.deb` da página
+1. Descarregar o `openmediavault-qnapx39_7.3.0_all.deb` da página
    [Releases](https://github.com/zrcz180/openmediavault-qnapx39/releases)
    (ou construí-lo, ver abaixo).
 2. Se tinha outro programa a usar o ecrã (por exemplo um serviço
@@ -86,7 +97,7 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
    ```
 3. Instalar:
    ```sh
-   sudo dpkg -i openmediavault-qnapx39_7.2.4_all.deb
+   sudo dpkg -i openmediavault-qnapx39_7.3.0_all.deb
    ```
 4. Em Sistema > QNAP > Fan control, ativar, **Guardar** e **Aplicar**.
 

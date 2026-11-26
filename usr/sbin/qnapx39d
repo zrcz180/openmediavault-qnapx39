@@ -47,6 +47,7 @@ import logging
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -99,6 +100,8 @@ DEFAULTS = {
     "lcdport": "/dev/ttyS1",
     "lcdtimeout": 60,        # backlight off after this many seconds, 0 never
     "lcdpower": True,        # Shutdown/Reboot menu on the LCD
+    # Set by Salt: OMV email on and the "QNAP TS-x39 hardware" event ticked.
+    "notify": False,
 }
 
 log = logging.getLogger("qnapx39d")
@@ -1059,6 +1062,74 @@ def target_pwm(config, srcs, current):
 
 
 # --------------------------------------------------------------------------
+# Fault emails (adapted from qnapd in openmediavault-qnap)
+# --------------------------------------------------------------------------
+
+# A volume this full is a problem.
+VOLUME_FULL_PERCENT = 95
+SOURCE_NAMES = {"cpu": "CPU", "sys": "system", "disk": "disk"}
+
+
+def extra_problems(srcs, vols):
+    """Critical temperatures and full volumes, as stable short strings."""
+    problems = ["%s temperature critical" % SOURCE_NAMES.get(name, name)
+                for name, temp, _, high in srcs
+                if temp >= high + CRITICAL_MARGIN]
+    problems += ["volume %s full" % name for name, used, _, _ in vols
+                 if used >= VOLUME_FULL_PERCENT]
+    return problems
+
+
+def send_mail(subject, body):
+    """Mail root; OMV's postfix forwards it to the notification address."""
+    message = "To: root\nSubject: %s\n\n%s\n" % (subject, body)
+    try:
+        subprocess.run(["/usr/sbin/sendmail", "-t"], input=message,
+                       text=True, capture_output=True, timeout=30,
+                       check=True)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("Cannot send notification: %s", e)
+
+
+class Notifier:
+    """Mails when hardware problems appear and when they clear, if OMV
+    notifications are on for this plugin. A problem must last
+    HOLD_SECONDS first, so a one-off glitch sends no mail."""
+
+    HOLD_SECONDS = 60
+
+    def __init__(self, enabled, mail=None):
+        self.enabled = enabled
+        self.mail = mail or send_mail
+        self.first_seen = {}
+        self.reported = set()
+
+    def update(self, problems, now):
+        problems = set(problems)
+        self.first_seen = {p: self.first_seen.get(p, now) for p in problems}
+        confirmed = {p for p, t in self.first_seen.items()
+                     if now - t >= self.HOLD_SECONDS}
+        new = confirmed - self.reported
+        cleared = self.reported - problems
+        self.reported = (self.reported | new) - cleared
+        if self.enabled and (new or cleared):
+            host = socket.gethostname()
+            if new:
+                subject = "QNAP hardware on %s: %s" % (host, sorted(new)[0])
+                if len(new) > 1:
+                    subject += " (+%d more)" % (len(new) - 1)
+            else:
+                subject = "QNAP hardware on %s: back to normal" % host
+            lines = ["New: " + p for p in sorted(new)] + \
+                ["Cleared: " + p for p in sorted(cleared)] + \
+                ["", "Current problems: %s" % (", ".join(sorted(
+                    self.reported)) or "none"),
+                 "Details: System > QNAP > Status and Disks."]
+            self.mail(subject, "\n".join(lines))
+        return new, cleared
+
+
+# --------------------------------------------------------------------------
 # Daemon
 # --------------------------------------------------------------------------
 
@@ -1075,7 +1146,7 @@ def load_config(path=None):
                 "diskhigh", "diskinterval", "lcdtimeout"):
         config[key] = int(config[key])
     for key in ("enable", "usecpu", "usesystem", "usedisk", "leds", "lcd",
-                "lcdpower"):
+                "lcdpower", "notify"):
         config[key] = bool(config[key])
     config["fans"] = parse_list(config["fans"], int)
     config["systemsensors"] = parse_list(config["systemsensors"])
@@ -1093,6 +1164,15 @@ def write_status(status, path=None):
 
 
 def failsafe(config):
+    # systemd sets SERVICE_RESULT for ExecStopPost: anything but success
+    # means the daemon crashed or was killed.
+    result = os.environ.get("SERVICE_RESULT")
+    if result not in (None, "", "success") and config["notify"]:
+        send_mail("QNAP hardware on %s: qnapx39d stopped unexpectedly"
+                  % socket.gethostname(),
+                  "qnapx39d exited (%s). The fans are at full speed until "
+                  "systemd restarts it. See `journalctl -u qnapx39d`."
+                  % result)
     sio = SuperIO.find()
     if not sio:
         log.error("No it87 sensor chip found: is the it87 module loaded?")
@@ -1140,6 +1220,7 @@ def run(config):
     current = None
     zero_rpm = {n: 0 for n in config["fans"]}
     problems_before = None
+    notifier = Notifier(config["notify"])
     try:
         while True:
             now = time.time()
@@ -1177,6 +1258,9 @@ def run(config):
             current = pwm
             ok, failed_bays, problems = panel_state(
                 fans, disks, read(MDSTAT_FILE) or "", disk_bays(config["bays"]))
+            more = extra_problems(srcs, volumes())
+            ok, problems = ok and not more, problems + more
+            notifier.update(problems, now)
             bays = bay_info(config["bays"], disk, disks.asleep, failed_bays)
             if problems != problems_before:
                 if problems:

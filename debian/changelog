@@ -1,3 +1,17 @@
+openmediavault-qnapx39 (7.3.0) stable; urgency=low
+
+  * Fault emails through OMV notifications (System > Notification >
+    Events, "QNAP TS-x39 hardware"): a failed fan, a critical temperature,
+    a failed disk, a degraded RAID or a full volume (95 %) that lasts a
+    minute, when it clears, and when the service stops unexpectedly.
+  * System > QNAP > Disks: each bay with its disk, model, size,
+    temperature, state and red LED.
+  * Dashboard: fans and temperatures grid, device facts and history
+    graphs of temperatures and fan speeds.
+  * A critical temperature or a full volume also turns the Status LED red.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 16:20:00 -0000
+
 openmediavault-qnapx39 (7.2.4) stable; urgency=low
 
   * LCD: a page per RAID array (level, disks, OK / DEGRADED / rebuild

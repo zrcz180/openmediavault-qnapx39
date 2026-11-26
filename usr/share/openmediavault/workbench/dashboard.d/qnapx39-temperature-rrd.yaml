@@ -1,0 +1,13 @@
+version: "1.0"
+type: dashboard-widget
+data:
+  id: 24c8e878-e8b9-4b38-bf20-a56cb4b1871f
+  type: rrd
+  title: _("QNAP temperature history")
+  description: _("Hottest temperature per source over the last day.")
+  permissions:
+    role:
+      - admin
+  rrd:
+    kind: exec-qnapx39-temperature
+    period: day

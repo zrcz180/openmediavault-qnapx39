@@ -1,0 +1,8 @@
+version: "1.0"
+type: navigation-item
+data:
+  path: "system.qnapx39.disks"
+  text: _("Disks")
+  position: 30
+  icon: "mdi:harddisk"
+  url: "/system/qnapx39/disks"

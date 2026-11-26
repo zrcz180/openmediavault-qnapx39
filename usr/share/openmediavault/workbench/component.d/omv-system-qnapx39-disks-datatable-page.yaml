@@ -1,0 +1,38 @@
+version: "1.0"
+type: component
+data:
+  name: omv-system-qnapx39-disks-datatable-page
+  type: datatablePage
+  config:
+    autoReload: 10000
+    hasSearchField: false
+    selectionType: none
+    limit: 0
+    stateId: 529bcc93-3436-46fd-8a60-35ecdc4dd4ea
+    store:
+      proxy:
+        service: Qnapx39
+        get:
+          method: getDisks
+    columns:
+      - name: _("Bay")
+        prop: bay
+        flexGrow: 1
+      - name: _("Device")
+        prop: device
+        flexGrow: 1
+      - name: _("Model")
+        prop: model
+        flexGrow: 3
+      - name: _("Size")
+        prop: size
+        flexGrow: 1
+      - name: _("Temperature")
+        prop: temp
+        flexGrow: 1
+      - name: _("State")
+        prop: state
+        flexGrow: 1
+      - name: _("Red LED")
+        prop: led
+        flexGrow: 1

@@ -9,7 +9,8 @@
  */
 
 class OMVModuleQnapx39 extends \OMV\Engine\Module\ServiceAbstract
-	implements \OMV\Engine\Notify\IListener, \OMV\Engine\Module\IServiceStatus
+	implements \OMV\Engine\Notify\IListener, \OMV\Engine\Module\IServiceStatus,
+		\OMV\Engine\Module\INotification
 {
 	/**
 	 * Must match the salt state directory srv/salt/omv/deploy/qnapx39.
@@ -21,7 +22,7 @@ class OMVModuleQnapx39 extends \OMV\Engine\Module\ServiceAbstract
 
 	public function getDescription()
 	{
-		return gettext("QNAP TS-x39 fan control.");
+		return gettext("QNAP TS-x39 fans, LEDs, LCD and fault emails.");
 	}
 
 	public function getStatus()
@@ -37,9 +38,29 @@ class OMVModuleQnapx39 extends \OMV\Engine\Module\ServiceAbstract
 		];
 	}
 
+	/**
+	 * System > Notification > Events entry. qnapx39d mails root (forwarded
+	 * to the configured address) only while this and email are enabled.
+	 */
+	public function getNotificationConfig()
+	{
+		return [[
+			"id" => "qnapx39",
+			"type" => gettext("Hardware"),
+			"title" => gettext("QNAP TS-x39 hardware (fans, temperatures, disks, RAID, volumes)")
+		]];
+	}
+
 	public function bindListeners(\OMV\Engine\Notify\Dispatcher $dispatcher)
 	{
 		$dispatcher->addListener(OMV_NOTIFY_MODIFY,
 			"org.openmediavault.conf.service.qnapx39", [$this, "setDirty"]);
+		// The notify flag in qnapx39d.json follows the notification settings.
+		$dispatcher->addListener(OMV_NOTIFY_MODIFY,
+			"org.openmediavault.conf.system.notification.email",
+			[$this, "setDirty"]);
+		$dispatcher->addListener(OMV_NOTIFY_MODIFY,
+			"org.openmediavault.conf.system.notification.notification",
+			[$this, "setDirty"]);
 	}
 }

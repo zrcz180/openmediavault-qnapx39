@@ -1,0 +1,13 @@
+version: "1.0"
+type: dashboard-widget
+data:
+  id: 2bfb9060-4371-45f9-a1ff-baee97981fa2
+  type: rrd
+  title: _("QNAP fan speed history")
+  description: _("Fan speeds over the last day.")
+  permissions:
+    role:
+      - admin
+  rrd:
+    kind: exec-qnapx39-fanspeed
+    period: day

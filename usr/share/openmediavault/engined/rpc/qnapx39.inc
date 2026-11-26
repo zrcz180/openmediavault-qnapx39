@@ -23,6 +23,8 @@ class OMVRpcServiceQnapx39 extends \OMV\Rpc\ServiceAbstract
 		$this->registerMethod("setSettings");
 		$this->registerMethod("getStatus");
 		$this->registerMethod("getGauges");
+		$this->registerMethod("getDisks");
+		$this->registerMethod("getDevice");
 	}
 
 	/**
@@ -154,5 +156,78 @@ class OMVRpcServiceQnapx39 extends \OMV\Rpc\ServiceAbstract
 			$result["duty"] = $status["duty"];
 		}
 		return empty($result) ? new \stdClass() : $result;
+	}
+
+	/**
+	 * One row per bay for the Disks page.
+	 */
+	public function getDisks($params, $context)
+	{
+		$this->validateMethodContext($context, ["role" => OMV_ROLE_ADMINISTRATOR]);
+		$status = $this->daemonStatus();
+		$states = ["OK" => gettext("OK"), "FAILED" => gettext("Failed"),
+			"sleep" => gettext("Standby"), "empty" => gettext("Empty")];
+		$rows = [];
+		foreach ($status["bays"] ?? [] as $bay) {
+			$state = $bay["state"] ?? "empty";
+			$rows[] = [
+				"bay" => $bay["bay"],
+				"device" => isset($bay["dev"]) ? "/dev/" . $bay["dev"] : "",
+				"model" => $bay["model"] ?? "",
+				"size" => $bay["size"] ?? "",
+				"temp" => isset($bay["temp"]) ? round($bay["temp"]) . " °C" : "",
+				"state" => $states[$state] ?? $state,
+				"led" => ($state === "FAILED") ? gettext("Red") : gettext("Off")
+			];
+		}
+		return $this->applyFilter($rows, 0, count($rows), null, null);
+	}
+
+	/**
+	 * The installed version, from the first line of the package changelog.
+	 */
+	private function version()
+	{
+		$gz = @gzopen("/usr/share/doc/openmediavault-qnapx39/changelog.gz", "r");
+		if ($gz === false) {
+			return "";
+		}
+		$line = gzgets($gz, 200);
+		gzclose($gz);
+		return preg_match('/\(([^)]+)\)/', (string)$line, $m) ? $m[1] : "";
+	}
+
+	/**
+	 * Device facts for the dashboard.
+	 */
+	public function getDevice($params, $context)
+	{
+		$this->validateMethodContext($context, ["role" => OMV_ROLE_ADMINISTRATOR]);
+		$read = function($path) {
+			$value = @file_get_contents($path);
+			return ($value === false) ? "" : trim($value);
+		};
+		$cpu = "";
+		if (preg_match('/^model name\s*:\s*(.+)$/m',
+				$read("/proc/cpuinfo"), $m)) {
+			$cpu = preg_replace('/\s+/', ' ', $m[1]);
+		}
+		$board = trim($read("/sys/class/dmi/id/board_vendor") . " " .
+			$read("/sys/class/dmi/id/board_name"));
+		$status = $this->daemonStatus();
+		$problems = $status["problems"] ?? [];
+		$rows = [
+			["property" => gettext("Host name"), "value" => gethostname()],
+			["property" => gettext("Processor"), "value" => $cpu],
+			["property" => gettext("Board"), "value" => $board],
+			["property" => gettext("Kernel"), "value" => php_uname("r") .
+				" (" . php_uname("m") . ")"],
+			["property" => gettext("Plugin"), "value" => $this->version()],
+			["property" => gettext("Hardware"), "value" =>
+				empty($status["running"]) ? gettext("Service not running") :
+				(empty($problems) ? gettext("All well") :
+					implode("; ", $problems))]
+		];
+		return $this->applyFilter($rows, 0, count($rows), null, null);
 	}
 }
