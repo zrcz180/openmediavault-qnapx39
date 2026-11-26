@@ -1,3 +1,48 @@
+openmediavault-qnapx39 (7.2.4) stable; urgency=low
+
+  * LCD: a page per RAID array (level, disks, OK / DEGRADED / rebuild
+    progress) and per data volume under /srv (used %, free and size).
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 15:55:00 -0000
+
+openmediavault-qnapx39 (7.2.3) stable; urgency=low
+
+  * Bays are now named by their stable SATA port (/dev/disk/by-path, PCI
+    address of the controller plus port), not by the kernel ataN number,
+    which changed after a reboot and left bays shown as empty. The old
+    default is replaced on upgrade; ataN names still work.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 15:45:00 -0000
+
+openmediavault-qnapx39 (7.2.2) stable; urgency=low
+
+  * LCD: send the line length (16) in the write command. It was 0x20,
+    so the panel waited for 32 characters and took the next line's
+    command as text: the IP line and disk lines showed parts of other
+    pages.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 15:35:00 -0000
+
+openmediavault-qnapx39 (7.2.1) stable; urgency=low
+
+  * LCD: one page per network port with its IPv4 address and link (read
+    from the kernel, so it no longer depends on the ip command), and one
+    page per disk bay with disk, temperature, state, size and model.
+  * LCD: Shutdown/Reboot menu on the last page, with a confirmation;
+    it can be turned off.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 15:30:00 -0000
+
+openmediavault-qnapx39 (7.2.0) stable; urgency=low
+
+  * Front LCD on the TS-639 Pro (A125 on /dev/ttyS1, powered by GPIO
+    GP10): host name and IP address, status, temperatures, fans, disks
+    and uptime. SELECT shows the next page, ENTER the previous one. The
+    backlight goes off after a set time without a press and comes back
+    on with a new problem.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Thu, 26 Nov 2026 15:10:00 -0000
+
 openmediavault-qnapx39 (7.1.1) stable; urgency=low
 
   * Add the LED settings (leds, bays) to an existing configuration on

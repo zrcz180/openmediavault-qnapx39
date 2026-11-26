@@ -60,6 +60,9 @@ configure_qnapx39d:
         fans: {{ config.fans | json }}
         leds: {{ config.leds | to_bool | json }}
         bays: {{ config.bays | json }}
+        lcd: {{ config.lcd | to_bool | json }}
+        lcdtimeout: {{ config.lcdtimeout }}
+        lcdpower: {{ config.lcdpower | to_bool | json }}
     - serializer: json
     - makedirs: True
     - user: root

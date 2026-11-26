@@ -106,6 +106,10 @@
 					"maximum": 3600,
 					"required": true
 				},
+				"lcdpower": {
+					"type": "boolean",
+					"required": true
+				},
 				"fans": {
 					"type": "string",
 					"pattern": "^[1-3](,[1-3])*$",
@@ -121,7 +125,17 @@
 				},
 				"bays": {
 					"type": "string",
-					"pattern": "^ata[0-9]+(,ata[0-9]+){0,5}$",
+					"pattern": "^((ata[0-9]+|pci-[0-9a-f:.]+-ata-[0-9]+)(,|$)){1,6}$",
+					"required": true
+				},
+				"lcd": {
+					"type": "boolean",
+					"required": true
+				},
+				"lcdtimeout": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 3600,
 					"required": true
 				}
 			}

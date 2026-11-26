@@ -95,7 +95,7 @@ class FakeSysfs(unittest.TestCase):
 
         real_sleep, d.time.sleep = d.time.sleep, sleep
         try:
-            d.run(config(usedisk=False, leds=False))
+            d.run(config(usedisk=False, leds=False, lcd=False))
         finally:
             d.time.sleep = real_sleep
         # Board at 40 C is below 45 C and CPU 28 C: lowest speed.
@@ -267,3 +267,312 @@ class Collectd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FrontLcd(unittest.TestCase):
+    def setUp(self):
+        self.r, self.w = os.pipe()
+        self.io = FakeIO([0xED, 0x0F, 0x9F, 0x7B, 0xFD])
+        self.lcd = d.Lcd(self.w, self.io, 0xA20)
+        self.now = [0.0]
+        d.time.sleep, self.real_sleep = (lambda s: None), d.time.sleep
+
+    def tearDown(self):
+        d.time.sleep = self.real_sleep
+        os.close(self.r)
+        try:
+            os.close(self.w)
+        except OSError:
+            pass
+
+    def sent(self):
+        os.set_blocking(self.r, False)
+        try:
+            return os.read(self.r, 4096)
+        except BlockingIOError:
+            return b""
+
+    def test_parse_buttons(self):
+        self.assertEqual(d.parse_buttons(b"\x53\x05\x00\x01\x53\x05\x00\x00"),
+                         ([1], b""))
+        self.assertEqual(d.parse_buttons(b"xx\x53\x05\x00\x02\x53\x05"),
+                         ([2], b"\x53\x05"))
+        self.assertEqual(d.parse_buttons(b"\x53\x05\x00"), ([], b"\x53\x05\x00"))
+        self.assertEqual(d.parse_buttons(b"junk"), ([], b""))
+
+    def test_power_backlight_and_lines(self):
+        self.lcd.power(True)
+        self.assertEqual(self.io.ports[0xA20] & 1, 0)   # GP10 low: on
+        self.lcd.backlight(True)
+        self.lcd.backlight(True)                         # sent once
+        self.lcd.show(("nas", "10.0.0.2"))
+        self.lcd.show(("nas", "10.0.0.3"))               # only line 2
+        self.assertEqual(
+            self.sent(),
+            b"\x4d\x5e\x01"
+            b"\x4d\x0c\x00\x10nas             "
+            b"\x4d\x0c\x01\x1010.0.0.2        "
+            b"\x4d\x0c\x01\x1010.0.0.3        ")
+        self.lcd.close(("bye", ""))
+        self.assertEqual(self.io.ports[0xA20], 0xED)    # GP10 back to 1
+
+    def test_text_is_ascii_16(self):
+        self.assertEqual(d.lcd_text("Temperatura 40°C!!"), "Temperatura 40?C")
+
+    def test_pages(self):
+        st = {"duty": 30, "problems": [],
+              "fans": [{"name": "fan1", "rpm": 1715}, {"name": "fan2",
+                                                       "rpm": 1713}],
+              "temps": {"cpu": [("Core 0", 28.0)],
+                        "system": [("temp1", 40.0), ("temp2", 38.0)],
+                        "disk": [("sdb", 35.0), ("sdc", 38.0)]},
+              "bays": [{"bay": 1, "dev": "sdh", "model": "WDC WD20EFRX-68",
+                        "size": "2.0T", "temp": 35.0, "state": "OK"},
+                       {"bay": 2, "dev": "sdb", "model": "ST4000", "size":
+                        "4.0T", "temp": None, "state": "FAILED"},
+                       {"bay": 3, "dev": None, "state": "empty"}]}
+        nics = [("eth0", "192.168.1.5", "1000Mb"), ("eth1", None, "down")]
+        pages = d.lcd_pages(st, "nas", nics, ("Up 1d 02:03", "L"), True)
+        self.assertEqual(pages, [
+            ("nas eth0 1000Mb", "192.168.1.5"),
+            ("nas eth1 down", "no IP address"),
+            ("Status: OK", "All well"),
+            ("CPU 28C", "System 40C"), ("Fans 30%", "1715 1713 RPM"),
+            ("Disks 2, max 38C", "min 35C"),
+            ("B1 sdh 35C OK", "2.0T WDC WD20EFRX-68"),
+            ("B2 sdb  FAIL", "4.0T ST4000"),
+            ("Bay 3", "empty"),
+            ("Up 1d 02:03", "L"), d.POWER_PAGE])
+        pages = d.lcd_pages({"problems": ["fan1 failed"]}, "nas", [])
+        self.assertEqual(pages[0], ("nas", "no network"))
+        self.assertEqual(pages[1], ("Status: PROBLEM", "fan1 failed"))
+        self.assertNotIn(d.POWER_PAGE, pages)
+
+    def panel(self, **kw):
+        self.ran = []
+        panel = d.LcdPanel(self.lcd, 60, clock=lambda: self.now[0],
+                           runner=self.ran.append, **kw)
+        panel.interfaces_time = 1e9   # no real network lookups
+        panel.interfaces = [("eth0", "10.0.0.2", "1000Mb")]
+        return panel
+
+    def test_buttons_pages_and_backlight_timeout(self):
+        panel = self.panel()
+        panel.update({"problems": []})
+        panel.refresh()
+        self.assertEqual(panel.page, 0)
+        self.assertTrue(self.lcd.lit)
+        panel.press(d.LCD_SELECT)
+        panel.refresh()
+        self.assertEqual(panel.page, 1)
+        panel.press(d.LCD_ENTER)
+        panel.press(d.LCD_ENTER)
+        panel.refresh()
+        self.assertEqual(panel.page, len(panel.pages()) - 1)
+        self.now[0] = 59.0
+        panel.refresh()
+        self.assertTrue(self.lcd.lit)
+        self.now[0] = 61.0
+        panel.refresh()
+        self.assertFalse(self.lcd.lit)
+        page = panel.page
+        panel.press(d.LCD_SELECT)        # first press only wakes
+        panel.refresh()
+        self.assertTrue(self.lcd.lit)
+        self.assertEqual(panel.page, page)
+        # A new problem jumps to the Status page and lights the panel.
+        self.now[0] = 200.0
+        panel.refresh()
+        self.assertFalse(self.lcd.lit)
+        panel.update({"problems": ["RAID degraded"]})
+        panel.refresh()
+        self.assertTrue(self.lcd.lit)
+        self.assertEqual(panel.page, 1)
+        self.assertEqual(self.lcd.lines[1], d.lcd_text("RAID degraded"))
+
+    def go_to_power_menu(self, panel):
+        panel.refresh()
+        panel.press(d.LCD_ENTER)          # back from page 0: last page
+        panel.refresh()
+        self.assertEqual(self.lcd.lines[0], d.lcd_text(d.POWER_PAGE[0]))
+        panel.press(d.LCD_ENTER)          # open the menu
+        panel.refresh()
+        self.assertEqual(self.lcd.lines[0], d.lcd_text("> Cancel"))
+
+    def test_reboot_needs_two_enters(self):
+        panel = self.panel(power=True)
+        self.go_to_power_menu(panel)
+        panel.press(d.LCD_SELECT)         # Reboot
+        panel.press(d.LCD_ENTER)
+        panel.refresh()
+        self.assertEqual(self.lcd.lines[0], d.lcd_text("Reboot? Sure?"))
+        self.assertEqual(self.ran, [])
+        panel.press(d.LCD_ENTER)
+        panel.refresh()
+        self.assertEqual(self.ran, [["systemctl", "reboot"]])
+        self.assertEqual(self.lcd.lines[0], d.lcd_text("Rebooting..."))
+        panel.press(d.LCD_SELECT)         # ignored from now on
+        self.assertEqual(len(self.ran), 1)
+
+    def test_menu_cancels(self):
+        panel = self.panel(power=True)
+        self.go_to_power_menu(panel)
+        panel.press(d.LCD_SELECT)
+        panel.press(d.LCD_SELECT)         # Shut down
+        panel.press(d.LCD_ENTER)
+        panel.press(d.LCD_SELECT)         # "no"
+        panel.refresh()
+        self.assertIsNone(panel.menu)
+        self.assertEqual(self.lcd.lines[0], d.lcd_text(d.POWER_PAGE[0]))
+        panel.press(d.LCD_ENTER)          # menu again
+        panel.press(d.LCD_SELECT)
+        panel.press(d.LCD_ENTER)          # Sure?
+        self.now[0] = 16.0                # no answer: cancelled
+        panel.refresh()
+        self.assertIsNone(panel.menu)
+        panel.press(d.LCD_ENTER)
+        self.assertEqual(self.ran, [])
+
+    def test_no_power_page_without_option(self):
+        panel = self.panel()
+        self.assertNotIn(d.POWER_PAGE, panel.pages())
+
+
+class Bays(FakeSysfs):
+    def disk(self, dev, port, model, sectors):
+        path = os.path.join(self.tmp.name, "devices", "pci0", port,
+                            "host0", "block", dev)
+        os.makedirs(os.path.join(path, "device"))
+        with open(os.path.join(path, "device", "model"), "w") as f:
+            f.write(model + "\n")
+        with open(os.path.join(path, "size"), "w") as f:
+            f.write("%d\n" % sectors)
+        block = os.path.join(self.tmp.name, "block")
+        os.makedirs(block, exist_ok=True)
+        os.symlink(path, os.path.join(block, dev))
+
+    def sata(self, dev, pci, ata, port_no):
+        """A disk as on Rui's NAS after a reboot renumbered the ports."""
+        path = os.path.join(self.tmp.name, "devices", "pci0000:00", pci,
+                            ata, "host0", "target0:0:0", "0:0:0:0",
+                            "block", dev)
+        os.makedirs(path)
+        block = os.path.join(self.tmp.name, "block")
+        os.makedirs(block, exist_ok=True)
+        os.symlink(path, os.path.join(block, dev))
+        port = os.path.join(self.tmp.name, "class", "ata_port", ata)
+        os.makedirs(port, exist_ok=True)
+        with open(os.path.join(port, "port_no"), "w") as f:
+            f.write("%d\n" % port_no)
+
+    def test_stable_port_names(self):
+        self.sata("sda", "0000:00:1f.1", "ata1", 1)
+        self.sata("sdb", "0000:03:00.0", "ata3", 1)
+        self.sata("sdf", "0000:03:00.0", "ata6", 4)
+        self.sata("sdh", "0000:04:00.0", "ata12", 2)
+        self.assertEqual(d.disk_port("sdh"), "pci-0000:04:00.0-ata-2")
+        self.assertEqual(d.disk_port("sdb"), "pci-0000:03:00.0-ata-1")
+        self.assertEqual(d.disk_bays(["pci-0000:04:00.0-ata-2",
+                                      "pci-0000:03:00.0-ata-1",
+                                      "pci-0000:03:00.0-ata-2",
+                                      "pci-0000:03:00.0-ata-4"]),
+                         {1: "sdh", 2: "sdb", 4: "sdf"})
+        # Old ataN names still work, and ata1 does not match ata12.
+        self.assertEqual(d.disk_bays(["ata1", "ata3"]), {1: "sda", 2: "sdb"})
+
+    def test_bay_info(self):
+        self.disk("sdh", "ata13", "WDC WD20EFRX-68EUZN0  ", 3907029168)
+        self.disk("sdb", "ata2", "ST500DM002", 976773168)
+        info = d.bay_info(["ata13", "ata2", "ata3"], [("sdh", 34.0)],
+                          {"sdb"}, set())
+        self.assertEqual(info, [
+            {"bay": 1, "dev": "sdh", "model": "WDC WD20EFRX-68EUZN0",
+             "size": "2.0T", "temp": 34.0, "state": "OK"},
+            {"bay": 2, "dev": "sdb", "model": "ST500DM002", "size": "500G",
+             "temp": None, "state": "sleep"},
+            {"bay": 3, "dev": None, "state": "empty"}])
+        self.assertEqual(d.bay_info(["ata13"], [], set(), {1})[0]["state"],
+                         "FAILED")
+
+    def test_network_interfaces(self):
+        net = os.path.join(self.tmp.name, "class", "net")
+        for name, files in (("lo", {}),
+                            ("eth0", {"device": "", "operstate": "up",
+                                      "speed": "1000"}),
+                            ("eth1", {"device": "", "operstate": "down",
+                                      "speed": "-1"}),
+                            ("eth2", {"device": "", "master": "",
+                                      "operstate": "up"}),
+                            ("docker0", {"operstate": "down"})):
+            os.makedirs(os.path.join(net, name))
+            for k, v in files.items():
+                with open(os.path.join(net, name, k), "w") as f:
+                    f.write(v)
+        real, d.ipv4_address = d.ipv4_address, \
+            {"eth0": "192.168.1.5"}.get
+        try:
+            self.assertEqual(d.network_interfaces(), [
+                ("eth0", "192.168.1.5", "1000Mb"), ("eth1", None, "down")])
+        finally:
+            d.ipv4_address = real
+
+
+MDSTAT = """Personalities : [raid1] [raid6] [raid5] [raid4]
+md0 : active raid5 sdh[5] sdg[4] sdf[3] sdd[2] sdc[1](F) sda[0]
+      9766891520 blocks super 1.2 level 5, 512k chunk, algorithm 2 [6/5] [U_UUUU]
+      [==>..................]  recovery = 12.6% (24681/195312) finish=1.2min
+
+md1 : active (auto-read-only) raid1 sdb[0] sde[1]
+      976630464 blocks super 1.2 [2/2] [UU]
+
+md2 : inactive sdx[0](S)
+      976630464 blocks super 1.2
+
+unused devices: <none>
+"""
+
+
+class Volumes(unittest.TestCase):
+    def test_md_arrays(self):
+        a = d.md_arrays(MDSTAT)
+        self.assertEqual([x["name"] for x in a], ["md0", "md1", "md2"])
+        self.assertEqual((a[0]["level"], a[0]["members"], a[0]["active"],
+                          a[0]["map"], a[0]["progress"]),
+                         ("raid5", 6, 5, "U_UUUU", ("recovery", 12.6)))
+        self.assertEqual((a[1]["level"], a[1]["map"], a[1]["progress"]),
+                         ("raid1", "UU", None))
+        self.assertEqual((a[2]["state"], a[2]["level"], a[2]["members"]),
+                         ("inactive", "", None))
+        pages = d.lcd_pages({}, "nas", [], arrays=a,
+                            vols=[("data", 78, 1.2e12, 9.8e12),
+                                  ("sdb1", 3, 950e9, 1e12)])
+        self.assertIn(("md0 raid5 5/6", "recovery 13% [U_UUUU]"), pages)
+        self.assertIn(("md1 raid1 2/2", "OK [UU]"), pages)
+        self.assertIn(("md2", "inactive"), pages)
+        self.assertIn(("data 78%", "1.2T free/9.8T"), pages)
+        self.assertIn(("sdb1 3%", "950G free/1.0T"), pages)
+
+    def test_volumes_only_under_srv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "srv", "dev-disk-by-label-data"))
+            mounts = os.path.join(tmp, "mounts")
+            with open(mounts, "w") as f:
+                f.write("/dev/sda1 / ext4 rw 0 0\n"
+                        "/dev/md0 %s/srv/dev-disk-by-label-data ext4 rw 0 0\n"
+                        "server:/x %s/srv/nfs nfs rw 0 0\n"
+                        "/dev/md0 %s/srv/again ext4 rw 0 0\n"
+                        % (tmp, tmp, tmp))
+            real, d.VOLUMES_ROOT = d.VOLUMES_ROOT, tmp + "/srv/"
+            try:
+                vols = d.volumes(mounts)
+            finally:
+                d.VOLUMES_ROOT = real
+        self.assertEqual(len(vols), 1)
+        name, used, free, size = vols[0]
+        self.assertEqual(name, "data")
+        self.assertTrue(0 <= used <= 100 and 0 < free <= size)
+
+    def test_bytes_text(self):
+        self.assertEqual([d.bytes_text(n) for n in (0, 999, 1.2e12, 4e9,
+                                                    15e12)],
+                         ["0B", "999B", "1.2T", "4.0G", "15T"])

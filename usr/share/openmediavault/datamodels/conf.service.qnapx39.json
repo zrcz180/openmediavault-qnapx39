@@ -123,8 +123,22 @@
 		},
 		"bays": {
 			"type": "string",
-			"default": "ata13,ata2,ata3,ata4,ata9,ata10",
-			"pattern": "^ata[0-9]+(,ata[0-9]+){0,5}$"
+			"default": "pci-0000:00:1f.1-ata-1,pci-0000:03:00.0-ata-2,pci-0000:03:00.0-ata-3,pci-0000:03:00.0-ata-4,pci-0000:04:00.0-ata-1,pci-0000:04:00.0-ata-2",
+			"pattern": "^((ata[0-9]+|pci-[0-9a-f:.]+-ata-[0-9]+)(,|$)){1,6}$"
+		},
+		"lcd": {
+			"type": "boolean",
+			"default": true
+		},
+		"lcdtimeout": {
+			"type": "integer",
+			"default": 60,
+			"minimum": 0,
+			"maximum": 3600
+		},
+		"lcdpower": {
+			"type": "boolean",
+			"default": true
 		}
 	}
 }
