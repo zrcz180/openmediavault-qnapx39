@@ -310,9 +310,9 @@ class FrontLcd(unittest.TestCase):
         self.assertEqual(
             self.sent(),
             b"\x4d\x5e\x01"
-            b"\x4d\x0c\x00\x20nas             "
-            b"\x4d\x0c\x01\x2010.0.0.2        "
-            b"\x4d\x0c\x01\x2010.0.0.3        ")
+            b"\x4d\x0c\x00\x10nas             "
+            b"\x4d\x0c\x01\x1010.0.0.2        "
+            b"\x4d\x0c\x01\x1010.0.0.3        ")
         self.lcd.close(("bye", ""))
         self.assertEqual(self.io.ports[0xA20], 0xED)    # GP10 back to 1
 

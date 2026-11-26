@@ -613,11 +613,15 @@ class Lcd:
             self.lit = on
 
     def show(self, lines):
-        """Write only the lines that changed: 1200 baud is slow."""
+        """Write only the lines that changed: 1200 baud is slow.
+
+        4D 0C <line> <length> then the text: the length byte must match
+        the text sent (16), or the panel takes the next command as text.
+        """
         for n, text in enumerate(lines[:2]):
             text = lcd_text(text)
             if self.lines[n] != text:
-                self.write(self.LINE + bytes([n, 0x20]) + text.encode())
+                self.write(self.LINE + bytes([n, LCD_WIDTH]) + text.encode())
                 self.lines[n] = text
 
     def buttons(self, timeout):
