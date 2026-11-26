@@ -725,10 +725,87 @@ def uptime_text():
             "Load " + " ".join(load))
 
 
+MOUNTS_FILE = "/proc/mounts"
+VOLUMES_ROOT = "/srv/"
+# Network and virtual file systems are not volumes of this NAS, and a
+# hung network share would block statvfs.
+NOT_VOLUMES = ("nfs", "nfs4", "cifs", "smb3", "sshfs", "fuse.sshfs",
+               "tmpfs", "overlay", "squashfs", "autofs")
+
+
+def md_arrays(text):
+    """[{name, level, members, active, status, progress}] from mdstat."""
+    result = []
+    blocks = re.split(r"\n(?=md\d+\s*:)", text)
+    for block in blocks:
+        m = re.match(r"(md\d+)\s*:\s*(\w+)\s+(?:\([^)]*\)\s+)?(raid\d+|linear)?",
+                     block)
+        if not m:
+            continue
+        counts = re.search(r"\[(\d+)/(\d+)\]\s*\[([U_]+)\]", block)
+        progress = re.search(r"(recovery|resync|reshape|check)\s*=\s*"
+                             r"([\d.]+)%", block)
+        result.append({
+            "name": m.group(1), "state": m.group(2),
+            "level": m.group(3) or "",
+            "members": int(counts.group(1)) if counts else None,
+            "active": int(counts.group(2)) if counts else None,
+            "map": counts.group(3) if counts else "",
+            "progress": (progress.group(1), float(progress.group(2)))
+            if progress else None})
+    return result
+
+
+def volumes(mounts=None):
+    """[(name, used %, free bytes, size bytes)] of the data volumes:
+    file systems OpenMediaVault mounts under /srv, one per device."""
+    try:
+        with open(mounts or MOUNTS_FILE) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    result, seen = [], set()
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 3:
+            continue
+        dev, mnt, fstype = fields[0], fields[1].replace("\\040", " "), \
+            fields[2]
+        if not mnt.startswith(VOLUMES_ROOT) or fstype in NOT_VOLUMES or \
+                dev in seen:
+            continue
+        seen.add(dev)
+        try:
+            st = os.statvfs(mnt)
+        except OSError:
+            continue
+        size = st.f_blocks * st.f_frsize
+        if not size:
+            continue
+        free = st.f_bavail * st.f_frsize
+        used = (st.f_blocks - st.f_bfree) * st.f_frsize
+        label = re.search(r"by-label-(.+)$", mnt)
+        name = label.group(1) if label else \
+            os.path.basename(os.path.realpath(dev)) if dev.startswith("/") \
+            else os.path.basename(mnt)
+        result.append((name, round(used * 100.0 / (used + free))
+                       if used + free else 100, free, size))
+    return result
+
+
+def bytes_text(n):
+    for unit in ("B", "K", "M", "G", "T", "P"):
+        if n < 1000 or unit == "P":
+            return ("%.1f%s" if n < 10 and unit != "B" else "%.0f%s") \
+                % (n, unit)
+        n /= 1000.0
+
+
 POWER_PAGE = ("Shutdown/Reboot", "ENTER = menu")
 
 
-def lcd_pages(status, hostname, interfaces, uptime=("", ""), power=False):
+def lcd_pages(status, hostname, interfaces, uptime=("", ""), power=False,
+              arrays=(), vols=()):
     """The pages SELECT steps through, each two 16-character lines."""
     pages = []
     for name, address, link in interfaces:
@@ -768,6 +845,24 @@ def lcd_pages(status, hostname, interfaces, uptime=("", ""), power=False):
         state = "FAIL" if b["state"] == "FAILED" else b["state"]
         pages.append(("B%d %s %s %s" % (b["bay"], b["dev"], temp, state),
                       "%s %s" % (b.get("size", ""), b.get("model", ""))))
+    for a in arrays:
+        if a["progress"]:
+            state = "%s %.0f%%" % a["progress"]
+        elif a["state"] != "active":
+            state = a["state"]
+        elif "_" in a["map"]:
+            state = "DEGRADED"
+        else:
+            state = "OK"
+        disks = "%s/%s" % (a["active"], a["members"]) \
+            if a["members"] else ""
+        pages.append((" ".join(x for x in (a["name"], a["level"], disks)
+                               if x),
+                      ("%s [%s]" % (state, a["map"])) if a["map"]
+                      else state))
+    for name, used, free, size in vols:
+        pages.append(("%s %d%%" % (name[:LCD_WIDTH - 5], used),
+                      "%s free/%s" % (bytes_text(free), bytes_text(size))))
     if any(uptime):
         pages.append(uptime)
     if power:
@@ -805,6 +900,7 @@ class LcdPanel:
         self.hostname = os.uname().nodename.split(".")[0]
         self.interfaces = []
         self.interfaces_time = None
+        self.volumes = []
         self.menu = None      # index in MENU while the menu is open
         self.sure = False     # asking for confirmation
         self.farewell = None  # last message, once a power action started
@@ -812,7 +908,8 @@ class LcdPanel:
 
     def pages(self):
         return lcd_pages(self.status, self.hostname, self.interfaces,
-                         uptime_text(), self.power)
+                         uptime_text(), self.power,
+                         md_arrays(read(MDSTAT_FILE) or ""), self.volumes)
 
     def status_page(self):
         return max(1, len(self.interfaces))
@@ -878,6 +975,7 @@ class LcdPanel:
         now = self.clock()
         if self.interfaces_time is None or now - self.interfaces_time > 30:
             self.interfaces = network_interfaces()
+            self.volumes = volumes()
             self.interfaces_time = now
         idle = now - self.touched
         if self.menu is not None and idle > self.MENU_TIMEOUT:

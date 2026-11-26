@@ -515,3 +515,64 @@ class Bays(FakeSysfs):
                 ("eth0", "192.168.1.5", "1000Mb"), ("eth1", None, "down")])
         finally:
             d.ipv4_address = real
+
+
+MDSTAT = """Personalities : [raid1] [raid6] [raid5] [raid4]
+md0 : active raid5 sdh[5] sdg[4] sdf[3] sdd[2] sdc[1](F) sda[0]
+      9766891520 blocks super 1.2 level 5, 512k chunk, algorithm 2 [6/5] [U_UUUU]
+      [==>..................]  recovery = 12.6% (24681/195312) finish=1.2min
+
+md1 : active (auto-read-only) raid1 sdb[0] sde[1]
+      976630464 blocks super 1.2 [2/2] [UU]
+
+md2 : inactive sdx[0](S)
+      976630464 blocks super 1.2
+
+unused devices: <none>
+"""
+
+
+class Volumes(unittest.TestCase):
+    def test_md_arrays(self):
+        a = d.md_arrays(MDSTAT)
+        self.assertEqual([x["name"] for x in a], ["md0", "md1", "md2"])
+        self.assertEqual((a[0]["level"], a[0]["members"], a[0]["active"],
+                          a[0]["map"], a[0]["progress"]),
+                         ("raid5", 6, 5, "U_UUUU", ("recovery", 12.6)))
+        self.assertEqual((a[1]["level"], a[1]["map"], a[1]["progress"]),
+                         ("raid1", "UU", None))
+        self.assertEqual((a[2]["state"], a[2]["level"], a[2]["members"]),
+                         ("inactive", "", None))
+        pages = d.lcd_pages({}, "nas", [], arrays=a,
+                            vols=[("data", 78, 1.2e12, 9.8e12),
+                                  ("sdb1", 3, 950e9, 1e12)])
+        self.assertIn(("md0 raid5 5/6", "recovery 13% [U_UUUU]"), pages)
+        self.assertIn(("md1 raid1 2/2", "OK [UU]"), pages)
+        self.assertIn(("md2", "inactive"), pages)
+        self.assertIn(("data 78%", "1.2T free/9.8T"), pages)
+        self.assertIn(("sdb1 3%", "950G free/1.0T"), pages)
+
+    def test_volumes_only_under_srv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "srv", "dev-disk-by-label-data"))
+            mounts = os.path.join(tmp, "mounts")
+            with open(mounts, "w") as f:
+                f.write("/dev/sda1 / ext4 rw 0 0\n"
+                        "/dev/md0 %s/srv/dev-disk-by-label-data ext4 rw 0 0\n"
+                        "server:/x %s/srv/nfs nfs rw 0 0\n"
+                        "/dev/md0 %s/srv/again ext4 rw 0 0\n"
+                        % (tmp, tmp, tmp))
+            real, d.VOLUMES_ROOT = d.VOLUMES_ROOT, tmp + "/srv/"
+            try:
+                vols = d.volumes(mounts)
+            finally:
+                d.VOLUMES_ROOT = real
+        self.assertEqual(len(vols), 1)
+        name, used, free, size = vols[0]
+        self.assertEqual(name, "data")
+        self.assertTrue(0 <= used <= 100 and 0 < free <= size)
+
+    def test_bytes_text(self):
+        self.assertEqual([d.bytes_text(n) for n in (0, 999, 1.2e12, 4e9,
+                                                    15e12)],
+                         ["0B", "999B", "1.2T", "4.0G", "15T"])

@@ -275,7 +275,7 @@ data:
         name: lcd
         label: _("Show status on the front LCD")
         value: true
-        hint: _("IP address of each network port, status, temperatures, fans, each disk bay and uptime. SELECT shows the next page and ENTER the previous one. Stop any other program that uses /dev/ttyS1 first.")
+        hint: _("IP address of each network port, status, temperatures, fans, each disk bay, RAID arrays, volumes and uptime. SELECT shows the next page and ENTER the previous one. Stop any other program that uses /dev/ttyS1 first.")
       - type: numberInput
         name: lcdtimeout
         label: _("Backlight off after")

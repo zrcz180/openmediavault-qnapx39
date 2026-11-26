@@ -25,7 +25,8 @@ por isso aquele plugin não serve. Este usa o driver `it87` do kernel.
   USB fica azul enquanto houver um disco USB ligado.
 - Ecrã LCD da frente (fase 2): IP de cada placa de rede, estado,
   temperaturas, ventoinhas, cada baía (disco, temperatura, estado,
-  tamanho, modelo) e tempo ligado. SELECT mostra a página seguinte e
+  tamanho, modelo), cada RAID (estado, reconstrução), cada volume (uso,
+  espaço livre) e tempo ligado. SELECT mostra a página seguinte e
   ENTER a anterior. Na última página, ENTER abre o menu Reiniciar/Desligar
   (pede confirmação; pode ser desativado). A luz apaga ao fim de um tempo sem carregar num botão
   (0 = sempre acesa) e volta a acender com um problema novo.
