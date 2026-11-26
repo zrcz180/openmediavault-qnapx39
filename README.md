@@ -17,7 +17,7 @@ kernel, os pinos GPIO da IT8718F e a porta série do ecrã. Do original
 vêm a estrutura do plugin (Salt, páginas da interface, painel, gráficos),
 o leitor de temperaturas dos discos e os emails de avaria.
 
-Versão atual: **7.3.0** (OpenMediaVault 7, Debian 12 "bookworm").
+Versão atual: **7.4.0** (OpenMediaVault 7, Debian 12 "bookworm").
 
 ## O que está incorporado
 
@@ -72,6 +72,19 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
   escolhe e ENTER confirma; é preciso um segundo ENTER em "Sure?". SELECT,
   ou 15 s sem carregar, cancela. Pode ser desativado.
 
+### Botões e bips
+
+- **USB Copy**: corre uma Tarefa agendada à escolha (por exemplo, copiar
+  uma pen USB para uma pasta partilhada). O LED USB pisca enquanto corre e
+  fica aceso 10 s quando acaba; se falhar, dá 3 bips curtos.
+- **Reset** mantido 3 a 10 segundos: corre outra Tarefa agendada. Toques
+  mais curtos ou mais longos não fazem nada; o plugin nunca apaga
+  configurações nem dados.
+- **Bips** como no QTS, pelo altifalante da caixa: 1 curto ao arrancar e
+  no Reset, 3 longos de 5 em 5 minutos com uma ventoinha parada, 2 longos
+  quando um RAID fica degradado ou começa a reconstruir.
+- Configura-se em Sistema > QNAP > Buttons.
+
 ### Interface web e avisos
 
 - **Sistema > QNAP > Fan control**: ventoinhas, temperaturas, LEDs, mapa
@@ -80,7 +93,7 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
 - **Sistema > QNAP > Disks**: cada baía com o disco, modelo, tamanho,
   temperatura, estado e LED vermelho.
 - Painel inicial: quadro com as ventoinhas e temperaturas, dados do
-  equipamento, gráficos do último dia e indicadores redondos (CPU,
+  equipamento (modelo, número de série, BIOS, CPU, kernel, versão), gráficos do último dia e indicadores redondos (CPU,
   sistema, discos, potência das ventoinhas).
 - Gráficos em Diagnóstico > Estatísticas de desempenho (hora, dia,
   semana, mês e ano).
@@ -94,7 +107,7 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
 
 ## Instalar
 
-1. Descarregar o `openmediavault-qnapx39_7.3.0_all.deb` da página
+1. Descarregar o `openmediavault-qnapx39_7.4.0_all.deb` da página
    [Releases](https://github.com/zrcz180/openmediavault-qnapx39/releases)
    (ou construí-lo, ver abaixo).
 2. Se tinha outro programa a usar o ecrã (por exemplo um serviço
@@ -104,7 +117,7 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
    ```
 3. Instalar:
    ```sh
-   sudo dpkg -i openmediavault-qnapx39_7.3.0_all.deb
+   sudo dpkg -i openmediavault-qnapx39_7.4.0_all.deb
    ```
 4. Em Sistema > QNAP > Fan control, ativar, **Guardar** e **Aplicar**.
 
@@ -127,6 +140,8 @@ não está ligado. O BIOS deixa as duas em modo manual a 50 %.
 | GP35 | Status verde |
 | GP34 | Status vermelho |
 | GP50 | USB (azul) |
+| GP16 (entrada) | botão USB Copy |
+| GP17 (entrada) | botão Reset |
 
 O BIOS faz piscar o Status com o gerador de pisca 1 ligado ao GP26
 (código 0x16). O plugin desliga esse pisca e o Status fica fixo.
@@ -157,6 +172,8 @@ ligado pelo GP10 (ativo a 0; o BIOS deixa-o a 1 e o ecrã apagado).
 
 Nenhum outro programa pode ter a `/dev/ttyS1` aberta.
 
+**Bip**: altifalante do PC (timer 2 e porta 0x61).
+
 Para outros modelos da série, `tools/it8718-gpio-dump.py` (só leitura) e
 `tools/it8718-gpio-probe.py` ajudam a mapear os LEDs, e o mapa das baías
 pode ser mudado na interface.
@@ -171,15 +188,10 @@ make docker-deb   # ou com Docker, numa imagem i386/debian:bookworm
 
 O GitHub Actions corre os testes e constrói o .deb em cada push.
 
-## Ainda por fazer
-
-- Botões Reset e USB Copy (entradas GP16, GP17, GP24, GP25, GP40 e GP53
-  ainda por mapear).
-
 ## Licença
 
 GPL-3.0-or-later, a mesma licença do original.
 
 Baseado no [omv-qnap-plugin](https://github.com/nader-eloshaiker/omv-qnap-plugin)
 © Nader Eloshaiker, GPL-3.0-or-later. O leitor de temperaturas dos discos
-e os emails de avaria foram adaptados desse projeto.
+os emails de avaria, os botões e os bips foram adaptados desse projeto.

@@ -139,6 +139,18 @@
 		"lcdpower": {
 			"type": "boolean",
 			"default": true
+		},
+		"beep": {
+			"type": "boolean",
+			"default": false
+		},
+		"usbcopytask": {
+			"type": "string",
+			"default": ""
+		},
+		"resettask": {
+			"type": "string",
+			"default": ""
 		}
 	}
 }

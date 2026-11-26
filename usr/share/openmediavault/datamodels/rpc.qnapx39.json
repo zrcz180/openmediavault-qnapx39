@@ -140,5 +140,40 @@
 				}
 			}
 		}
+	},
+	{
+		"type": "rpc",
+		"id": "rpc.qnapx39.setbuttonsettings",
+		"params": {
+			"type": "object",
+			"properties": {
+				"beep": {
+					"type": "boolean",
+					"required": true
+				},
+				"usbcopytask": {
+					"type": "string",
+					"oneOf": [{
+						"type": "string",
+						"format": "uuidv4"
+					}, {
+						"type": "string",
+						"maxLength": 0
+					}],
+					"required": true
+				},
+				"resettask": {
+					"type": "string",
+					"oneOf": [{
+						"type": "string",
+						"format": "uuidv4"
+					}, {
+						"type": "string",
+						"maxLength": 0
+					}],
+					"required": true
+				}
+			}
+		}
 	}
 ]

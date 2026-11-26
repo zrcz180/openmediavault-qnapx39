@@ -14,6 +14,25 @@
   {'operator': 'stringEquals', 'arg0': 'id', 'arg1': 'qnapx39'}) %}
 {% set notify = (email_config.enable | to_bool) and
   (notification | length > 0 and notification[0].enable | to_bool) %}
+# Buttons: the script OMV writes for each chosen Scheduled Task, and its
+# user (qnapx39d runs it; a deleted task means no action).
+{% set scripts_dir = salt['pillar.get']('default:OMV_CRONSCRIPTS_DIR',
+  '/var/lib/openmediavault/cron.d') %}
+{% set script_prefix = salt['pillar.get'](
+  'default:OMV_CRONTAB_USERDEFINED_PREFIX', 'userdefined-') %}
+{% set tasks = {'usbcopy': None, 'reset': None} %}
+{% for button in ['usbcopy', 'reset'] %}
+{% set uuid = config.get(button ~ 'task', '') %}
+{% if uuid %}
+{% set jobs = salt['omv_conf.get_by_filter']('conf.system.cron.job',
+  {'operator': 'stringEquals', 'arg0': 'uuid', 'arg1': uuid}) %}
+{% if jobs | length > 0 %}
+{% set _ = tasks.update({button: {
+  'script': scripts_dir ~ '/' ~ script_prefix ~ uuid,
+  'user': jobs[0].username}}) %}
+{% endif %}
+{% endif %}
+{% endfor %}
 
 # The IT8718F is driven by the in-kernel it87 driver; Debian does not load
 # it on its own.
@@ -72,6 +91,9 @@ configure_qnapx39d:
         lcdtimeout: {{ config.lcdtimeout }}
         lcdpower: {{ config.lcdpower | to_bool | json }}
         notify: {{ notify | json }}
+        beep: {{ config.beep | to_bool | json }}
+        usbcopy: {{ tasks.usbcopy | json }}
+        reset: {{ tasks.reset | json }}
     - serializer: json
     - makedirs: True
     - user: root

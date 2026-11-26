@@ -62,5 +62,8 @@ class OMVModuleQnapx39 extends \OMV\Engine\Module\ServiceAbstract
 		$dispatcher->addListener(OMV_NOTIFY_MODIFY,
 			"org.openmediavault.conf.system.notification.notification",
 			[$this, "setDirty"]);
+		// The button tasks in qnapx39d.json carry the task's user.
+		$dispatcher->addListener(OMV_NOTIFY_MODIFY | OMV_NOTIFY_DELETE,
+			"org.openmediavault.conf.system.cron.job", [$this, "setDirty"]);
 	}
 }

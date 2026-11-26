@@ -50,6 +50,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 CONFIG_FILE = "/etc/qnapx39d/qnapx39d.json"
@@ -102,6 +103,10 @@ DEFAULTS = {
     "lcdpower": True,        # Shutdown/Reboot menu on the LCD
     # Set by Salt: OMV email on and the "QNAP TS-x39 hardware" event ticked.
     "notify": False,
+    "beep": False,           # QTS beeps on the PC speaker
+    # Set by Salt: {"script": ..., "user": ...} of the chosen Scheduled Task.
+    "usbcopy": None,
+    "reset": None,
 }
 
 log = logging.getLogger("qnapx39d")
@@ -396,13 +401,12 @@ class PortIO:
     def __init__(self):
         self.fd = os.open(PORT_DEVICE, os.O_RDWR)
 
+    # pread/pwrite: the LED, LCD and button threads share no file offset.
     def outb(self, addr, value):
-        os.lseek(self.fd, addr, os.SEEK_SET)
-        os.write(self.fd, bytes([value]))
+        os.pwrite(self.fd, bytes([value]), addr)
 
     def inb(self, addr):
-        os.lseek(self.fd, addr, os.SEEK_SET)
-        return os.read(self.fd, 1)[0]
+        return os.pread(self.fd, 1, addr)[0]
 
 
 class SuperIOConfig:
@@ -459,6 +463,7 @@ class FrontPanel:
         self.config = config  # SuperIOConfig, to stop hardware blinking
         self.blink = list(blink)
         self.unmapped = {}
+        self.usb_busy = False
         pins = [self.STATUS_GREEN, self.STATUS_RED, self.USB] + \
             list(self.DISK_RED.values())
         self.original = {s: self.io.inb(base + s - 1)
@@ -505,7 +510,8 @@ class FrontPanel:
         self.stop_blink(self.STATUS_BLINK)
         self.set(self.STATUS_GREEN, ok)
         self.set(self.STATUS_RED, not ok)
-        self.set(self.USB, usb)
+        if not self.usb_busy:   # USB Copy drives the USB LED meanwhile
+            self.set(self.USB, usb)
         for bay, pin in self.DISK_RED.items():
             self.set(pin, bay in failed_bays)
 
@@ -1130,6 +1136,275 @@ class Notifier:
 
 
 # --------------------------------------------------------------------------
+# Beeper and buttons (adapted from qnapd in openmediavault-qnap)
+# --------------------------------------------------------------------------
+
+# OMV writes each Scheduled Task to a script named after its uuid.
+TASK_SCRIPT = re.compile(r"^/var/lib/openmediavault/cron\.d/"
+                         r"userdefined-[0-9a-f]{8}(-[0-9a-f]{4}){3}-"
+                         r"[0-9a-f]{12}$")
+
+
+class Beeper:
+    """QTS beeps on the PC speaker (PIT channel 2 and port 0x61, checked on
+    a TS-639 Pro). S = short, L = long; one pattern at a time, in the
+    background."""
+
+    TONE_HZ = 1000
+    SHORT, LONG, GAP = 0.5, 1.5, 0.4
+    PATTERNS = {
+        "startup": "S", "reset": "S",
+        "usbcopy-failed": "SSS",
+        "fan-failure": "LLL",
+        "storage": "LL",  # a RAID degraded, or a rebuild started
+    }
+
+    def __init__(self, enabled, io=None):
+        self.enabled = enabled
+        self.io = io
+        self.lock = threading.Lock()
+
+    def beep(self, event, wait=False):
+        if not self.enabled:
+            return
+        thread = threading.Thread(target=self.play,
+                                  args=(self.PATTERNS[event],), daemon=True)
+        thread.start()
+        if wait:
+            thread.join(10)
+
+    def tone(self, on):
+        if on:
+            divisor = 1193182 // self.TONE_HZ
+            self.io.outb(0x43, 0xB6)  # channel 2, square wave
+            self.io.outb(0x42, divisor & 0xFF)
+            self.io.outb(0x42, divisor >> 8)
+            self.io.outb(0x61, self.io.inb(0x61) | 0x03)
+        else:
+            self.io.outb(0x61, self.io.inb(0x61) & 0xFC)
+
+    def play(self, pattern):
+        with self.lock:
+            try:
+                if self.io is None:
+                    self.io = PortIO()
+                for i, mark in enumerate(pattern):
+                    if i:
+                        time.sleep(self.GAP)
+                    self.tone(True)
+                    try:
+                        time.sleep(self.LONG if mark == "L" else self.SHORT)
+                    finally:
+                        self.tone(False)
+            except OSError as e:
+                log.warning("Cannot beep: %s", e)
+
+
+def run_task(task):
+    """Run an OMV Scheduled Task's script as its user; True on exit 0."""
+    script, user = task["script"], task.get("user") or "root"
+    if not TASK_SCRIPT.match(script) or not os.access(script, os.X_OK):
+        log.warning("Scheduled task %s not found; save it in OMV first",
+                    script)
+        return False
+    cmd = [script] if user == "root" else ["runuser", "-u", user, "--",
+                                           script]
+    try:
+        done = subprocess.run(cmd, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.PIPE, text=True)
+    except OSError as e:
+        log.warning("Cannot run %s: %s", script, e)
+        return False
+    if done.returncode:
+        log.warning("%s exited with %d: %s", script, done.returncode,
+                    done.stderr.strip()[-500:])
+    return done.returncode == 0
+
+
+class UsbLed:
+    """The blue USB LED (GP50, active-low), blinked in software while the
+    USB Copy task runs. The LED loop leaves it alone meanwhile."""
+
+    PIN = (5, 0)
+    BLINK = 0.4
+
+    def __init__(self, io, base, panel=None):
+        self.io = io
+        self.base = base
+        self.panel = panel
+        self.stop = threading.Event()
+
+    def set(self, on):
+        s, bit = self.PIN
+        addr = self.base + s - 1
+        value = self.io.inb(addr)
+        self.io.outb(addr, value & ~(1 << bit) if on else value | 1 << bit)
+
+    def claim(self, busy):
+        if self.panel:
+            self.panel.usb_busy = busy
+
+    def blink_until(self, done):
+        """Blink until the `done` event is set."""
+        on = False
+        while not done.wait(self.BLINK):
+            on = not on
+            self.set(on)
+
+
+class Buttons:
+    """USB Copy (GP16) and Reset (GP17), both active-low. USB Copy runs its
+    Scheduled Task when released; Reset runs its task when held RESET_HOLD
+    seconds (shorter and RESET_LONG or longer holds do nothing). One task
+    runs at a time."""
+
+    USBCOPY = (1, 6)   # GP16
+    RESET = (1, 7)     # GP17
+    POLL = 0.05
+    RESET_HOLD = 3
+    RESET_LONG = 10
+    DONE_SECONDS = 10  # USB LED solid after a successful copy
+
+    def __init__(self, config, beeper, io, base, usb_led=None,
+                 runner=run_task):
+        self.config = config
+        self.beeper = beeper
+        self.io = io
+        self.base = base
+        self.usb_led = usb_led
+        self.runner = runner
+        self.pressed = {}
+        self.busy = threading.Lock()
+        self.stop = threading.Event()
+        self.thread = None
+
+    def read(self):
+        """{"usbcopy": pressed?, "reset": pressed?}"""
+        value = self.io.inb(self.base + self.USBCOPY[0] - 1)
+        return {"usbcopy": not value >> self.USBCOPY[1] & 1,
+                "reset": not value >> self.RESET[1] & 1}
+
+    def handle(self, name, down, now):
+        """A button changed; returns the task started, if any."""
+        if down:
+            self.pressed[name] = now
+            return None
+        if name not in self.pressed:
+            return None
+        held = now - self.pressed.pop(name)
+        if name == "usbcopy":
+            log.info("USB Copy pressed")
+            return self.start_task("usbcopy", self.config.get("usbcopy"))
+        log.info("Reset held %.1f s", held)
+        if held < self.RESET_HOLD or held >= self.RESET_LONG:
+            return None
+        self.beeper.beep("reset")
+        return self.start_task("reset", self.config.get("reset"))
+
+    def start_task(self, name, task):
+        if not task:
+            return None
+        if not self.busy.acquire(blocking=False):
+            log.info("%s ignored: a button task is still running", name)
+            return None
+        thread = threading.Thread(target=self.run, args=(name, task),
+                                  name=name, daemon=True)
+        thread.start()
+        return name
+
+    def run(self, name, task):
+        blinker = None
+        done = threading.Event()
+        try:
+            if name == "usbcopy" and self.usb_led:
+                self.usb_led.claim(True)
+                blinker = threading.Thread(target=self.usb_led.blink_until,
+                                           args=(done,), daemon=True)
+                blinker.start()
+            ok = self.runner(task)
+            log.info("%s task %s", name, "finished" if ok else "failed")
+            done.set()
+            if blinker:
+                blinker.join(2)
+            if name == "usbcopy":
+                if self.usb_led:
+                    self.usb_led.set(ok)
+                if ok:
+                    self.stop.wait(self.DONE_SECONDS)
+                else:
+                    self.beeper.beep("usbcopy-failed")
+        except OSError as e:
+            log.warning("%s: %s", name, e)
+        finally:
+            done.set()
+            if self.usb_led and name == "usbcopy":
+                self.usb_led.claim(False)
+            self.busy.release()
+
+    def poll(self, now):
+        state = self.read()
+        for name, down in state.items():
+            if down != (name in self.pressed):
+                self.handle(name, down, now)
+
+    def start(self):
+
+        def loop():
+            while not self.stop.is_set():
+                try:
+                    self.poll(time.monotonic())
+                except OSError as e:
+                    log.warning("Button input failed: %s", e)
+                    self.stop.wait(5)
+                self.stop.wait(self.POLL)
+        self.thread = threading.Thread(target=loop, name="buttons",
+                                       daemon=True)
+        self.thread.start()
+
+    def finish(self):
+        self.stop.set()
+        if self.thread:
+            self.thread.join(2)
+
+
+def storage_state(mdstat):
+    """"ok", or "degraded" / "rebuilding" for the RAID arrays."""
+    arrays = md_arrays(mdstat)
+    if any(a["progress"] and a["progress"][0] in ("recovery", "reshape")
+           for a in arrays):
+        return "rebuilding"
+    if any("_" in a["map"] for a in arrays):
+        return "degraded"
+    return "ok"
+
+
+class Alarms:
+    """QTS beeps: a stopped fan every FAN_ALARM_SECONDS; the RAID turning
+    degraded or starting a rebuild (not the state found at start)."""
+
+    FAN_ALARM_SECONDS = 300
+
+    def __init__(self, beeper):
+        self.beeper = beeper
+        self.fan_beep = None
+        self.storage_seen = None
+
+    def update(self, fans, storage, now):
+        if any(f.get("failed") for f in fans):
+            if self.fan_beep is None or \
+                    now - self.fan_beep >= self.FAN_ALARM_SECONDS:
+                self.beeper.beep("fan-failure")
+                self.fan_beep = now
+        else:
+            self.fan_beep = None
+        if self.storage_seen is not None and storage != "ok" and \
+                storage != self.storage_seen:
+            self.beeper.beep("storage")
+        self.storage_seen = storage
+
+
+# --------------------------------------------------------------------------
 # Daemon
 # --------------------------------------------------------------------------
 
@@ -1146,8 +1421,14 @@ def load_config(path=None):
                 "diskhigh", "diskinterval", "lcdtimeout"):
         config[key] = int(config[key])
     for key in ("enable", "usecpu", "usesystem", "usedisk", "leds", "lcd",
-                "lcdpower", "notify"):
+                "lcdpower", "notify", "beep"):
         config[key] = bool(config[key])
+    for key in ("usbcopy", "reset"):
+        task = config.get(key)
+        config[key] = {"script": task["script"],
+                       "user": str(task.get("user") or "root")} \
+            if isinstance(task, dict) and \
+            isinstance(task.get("script"), str) else None
     config["fans"] = parse_list(config["fans"], int)
     config["systemsensors"] = parse_list(config["systemsensors"])
     config["bays"] = parse_list(config["bays"])
@@ -1216,6 +1497,20 @@ def run(config):
         except OSError as e:
             log.warning("Front LCD disabled: %s", e)
             lcd = None
+    beeper = Beeper(config["beep"])
+    alarms = Alarms(beeper)
+    buttons = None
+    try:
+        io = PortIO()
+        with SuperIOConfig(io) as cfg:
+            chip, base, _ = cfg.gpio()
+        if chip == 0x8718 and base:
+            usb_led = UsbLed(PortIO(), base, panel)
+            buttons = Buttons(config, beeper, PortIO(), base, usb_led)
+            buttons.start()
+    except OSError as e:
+        log.warning("Buttons disabled: %s", e)
+    beeper.beep("startup")
     disks = DiskTemps(config["diskinterval"])
     current = None
     zero_rpm = {n: 0 for n in config["fans"]}
@@ -1261,6 +1556,7 @@ def run(config):
             more = extra_problems(srcs, volumes())
             ok, problems = ok and not more, problems + more
             notifier.update(problems, now)
+            alarms.update(fans, storage_state(read(MDSTAT_FILE) or ""), now)
             bays = bay_info(config["bays"], disk, disks.asleep, failed_bays)
             if problems != problems_before:
                 if problems:
@@ -1289,6 +1585,8 @@ def run(config):
         log.info("Stopping")
     finally:
         failsafe(config)
+        if buttons:
+            buttons.finish()
         if panel:
             try:
                 panel.restore()
