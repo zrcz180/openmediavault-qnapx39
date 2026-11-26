@@ -1,0 +1,14 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: openmediavault-qnapx39
+Source: https://github.com/zrcz180/openmediavault-qnapx39
+
+Files: *
+Copyright: 2026 Rui
+License: GPL-3+
+Comment: Parts adapted from openmediavault-qnap
+ (https://github.com/nader-eloshaiker/omv-qnap-plugin),
+ Copyright Nader Eloshaiker, GPL-3.0-or-later.
+
+License: GPL-3+
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 can be found in /usr/share/common-licenses/GPL-3.

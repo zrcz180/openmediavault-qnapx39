@@ -1,0 +1,8 @@
+version: "1.0"
+type: navigation-item
+data:
+  path: "system.qnapx39.fan"
+  text: _("Fan control")
+  position: 10
+  icon: "mdi:fan"
+  url: "/system/qnapx39/fan"

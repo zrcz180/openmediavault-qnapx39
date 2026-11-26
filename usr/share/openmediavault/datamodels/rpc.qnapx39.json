@@ -1,0 +1,121 @@
+[
+	{
+		"type": "rpc",
+		"id": "rpc.qnapx39.setsettings",
+		"params": {
+			"type": "object",
+			"properties": {
+				"enable": {
+					"type": "boolean",
+					"required": true
+				},
+				"interval": {
+					"type": "integer",
+					"minimum": 2,
+					"maximum": 120,
+					"required": true
+				},
+				"fanmode": {
+					"type": "string",
+					"enum": [
+						"auto",
+						"manual"
+					],
+					"required": true
+				},
+				"manualspeed": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 100,
+					"required": true
+				},
+				"minspeed": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 100,
+					"required": true
+				},
+				"maxspeed": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 100,
+					"required": true
+				},
+				"hysteresis": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 15,
+					"required": true
+				},
+				"usecpu": {
+					"type": "boolean",
+					"required": true
+				},
+				"cpulow": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 110,
+					"required": true
+				},
+				"cpuhigh": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 110,
+					"required": true
+				},
+				"usesystem": {
+					"type": "boolean",
+					"required": true
+				},
+				"syslow": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 110,
+					"required": true
+				},
+				"syshigh": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 110,
+					"required": true
+				},
+				"systemsensors": {
+					"type": "string",
+					"pattern": "^(temp[1-3])(,temp[1-3])*$",
+					"required": true
+				},
+				"usedisk": {
+					"type": "boolean",
+					"required": true
+				},
+				"disklow": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 110,
+					"required": true
+				},
+				"diskhigh": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 110,
+					"required": true
+				},
+				"diskinterval": {
+					"type": "integer",
+					"minimum": 10,
+					"maximum": 3600,
+					"required": true
+				},
+				"fans": {
+					"type": "string",
+					"pattern": "^[1-3](,[1-3])*$",
+					"required": true
+				},
+				"loadmodule": {
+					"type": "boolean",
+					"required": true
+				}
+			}
+		}
+	}
+]

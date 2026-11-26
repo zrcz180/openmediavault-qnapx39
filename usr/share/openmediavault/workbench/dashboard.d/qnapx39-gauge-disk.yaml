@@ -1,0 +1,27 @@
+version: "1.0"
+type: dashboard-widget
+data:
+  id: 98f3f868-cba6-5403-bf11-cd46764035ab
+  permissions:
+    role:
+      - admin
+  title: _("QNAP disk temperature")
+  description: _("Hottest awake hard drive.")
+  type: chart
+  reloadPeriod: 10000
+  chart:
+    type: gauge
+    maxHeight: "150px"
+    min: 0
+    max: 70
+    displayValue: true
+    request:
+      service: Qnapx39
+      method: getGauges
+    label:
+      formatter: template
+      formatterConfig: "{% if value == value %}{{ value | tofixed(0) }} °C{% else %}No reading{% endif %}"
+    dataConfig:
+      - label: _("Disks")
+        prop: disk
+        backgroundColor: "#fdaf00"

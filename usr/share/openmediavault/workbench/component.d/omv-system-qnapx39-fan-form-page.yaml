@@ -1,0 +1,256 @@
+version: "1.0"
+type: component
+data:
+  name: omv-system-qnapx39-fan-form-page
+  type: formPage
+  config:
+    request:
+      service: Qnapx39
+      get:
+        method: getSettings
+      post:
+        method: setSettings
+    hints:
+      - type: info
+        text: _("Set the options, click Save, then Apply. If fan control stops or a sensor goes missing, the fans run at full speed.")
+    fields:
+      - type: checkbox
+        name: enable
+        label: _("Control the fans")
+        value: false
+      - type: checkbox
+        name: loadmodule
+        label: _("Load the it87 sensor driver at boot")
+        value: true
+        hint: _("Needed for fan control. Untick only if you load it87 yourself.")
+      - type: select
+        name: fanmode
+        label: _("Fan mode")
+        value: auto
+        store:
+          data:
+            - ["auto", _("Follow the temperatures")]
+            - ["manual", _("Fixed speed")]
+      - type: numberInput
+        name: manualspeed
+        label: _("Fixed fan speed (%)")
+        value: 50
+        validators:
+          min: 0
+          max: 100
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: manual
+      - type: numberInput
+        name: minspeed
+        label: _("Lowest fan speed (%)")
+        value: 30
+        validators:
+          min: 0
+          max: 100
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: numberInput
+        name: maxspeed
+        label: _("Highest fan speed (%)")
+        value: 100
+        validators:
+          min: 0
+          max: 100
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: numberInput
+        name: hysteresis
+        label: _("Slow down only after cooling by (°C)")
+        value: 3
+        hint: _("Stops the fans from changing speed all the time.")
+        validators:
+          min: 0
+          max: 15
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: numberInput
+        name: interval
+        label: _("Check every (seconds)")
+        value: 10
+        validators:
+          min: 2
+          max: 120
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: divider
+        title: _("What the fans react to")
+      - type: checkbox
+        name: usecpu
+        label: _("Processor temperature")
+        value: true
+      - type: numberInput
+        name: cpulow
+        label: _("Processor temperature, speed up from (°C)")
+        value: 60
+        validators:
+          min: 0
+          max: 110
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: numberInput
+        name: cpuhigh
+        label: _("Processor temperature, full speed at (°C)")
+        value: 85
+        validators:
+          min: 0
+          max: 110
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: checkbox
+        name: usesystem
+        label: _("Board temperatures (it87)")
+        value: true
+      - type: numberInput
+        name: syslow
+        label: _("Board temperatures, speed up from (°C)")
+        value: 45
+        validators:
+          min: 0
+          max: 110
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: numberInput
+        name: syshigh
+        label: _("Board temperatures, full speed at (°C)")
+        value: 60
+        validators:
+          min: 0
+          max: 110
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: checkbox
+        name: usedisk
+        label: _("Hard drive temperatures")
+        value: true
+        hint: _("Sleeping drives are never woken up to read them.")
+      - type: numberInput
+        name: disklow
+        label: _("Hard drive temperatures, speed up from (°C)")
+        value: 38
+        validators:
+          min: 0
+          max: 110
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: numberInput
+        name: diskhigh
+        label: _("Hard drive temperatures, full speed at (°C)")
+        value: 50
+        validators:
+          min: 0
+          max: 110
+          patternType: integer
+          required: true
+        modifiers:
+          - type: visible
+            constraint:
+              operator: eq
+              arg0:
+                prop: fanmode
+              arg1: auto
+      - type: textInput
+        name: systemsensors
+        label: _("Board sensors to use")
+        value: "temp1,temp2,temp3"
+        hint: _("it87 temperature inputs, comma separated.")
+        validators:
+          required: true
+          pattern: "^(temp[1-3])(,temp[1-3])*$"
+      - type: numberInput
+        name: diskinterval
+        label: _("Read the drives every (seconds)")
+        value: 300
+        validators:
+          min: 10
+          max: 3600
+          patternType: integer
+          required: true
+      - type: textInput
+        name: fans
+        label: _("Fans to control")
+        value: "1,2"
+        hint: _("pwmN drives fanN. On a TS-639 Pro these are 1 and 2.")
+        validators:
+          required: true
+          pattern: "^[1-3](,[1-3])*$"
+    buttons:
+      - template: submit
+      - template: cancel
+        execute:
+          type: url
+          url: "/system/qnapx39"

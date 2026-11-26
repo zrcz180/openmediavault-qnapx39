@@ -1,0 +1,6 @@
+version: "1.0"
+type: route
+data:
+  url: "/system/qnapx39"
+  title: _("QNAP")
+  component: omv-system-qnapx39-navigation-page

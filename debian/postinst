@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# This file is part of openmediavault-qnapx39 (GPL-3.0-or-later).
+
+set -e
+
+. /etc/default/openmediavault
+. /usr/share/openmediavault/scripts/helper-functions
+
+case "$1" in
+    configure)
+        dpkg-trigger update-workbench
+        echo "Updating configuration database ..."
+        omv-confdbadm create "conf.service.qnapx39"
+        if [ -n "$2" ]; then
+            omv-confdbadm migrate "conf.service.qnapx39" "${2%%~*}"
+        fi
+        omv-salt deploy run --no-color --quiet qnapx39 || :
+        omv-salt deploy run --no-color --quiet collectd || :
+        omv-mkrrdgraph >/dev/null 2>&1 || :
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+# Pick up a new daemon and unit file after an upgrade.
+if [ "$1" = "configure" ] && [ -n "$2" ]; then
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || :
+    fi
+    deb-systemd-invoke try-restart qnapx39d.service || :
+fi
+
+exit 0
