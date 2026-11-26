@@ -185,8 +185,8 @@ class Leds(unittest.TestCase):
     def setUp(self):
         self.io = FakeIO([0xED, 0x0F, 0x9F, 0x7B, 0xFD])
         self.cfg = d.SuperIOConfig(self.io)
-        # BIOS blinks GP35 (location 0x1D) on blink generator 1.
-        self.panel = d.FrontPanel(self.io, 0xA20, [0x1D, 0], self.cfg)
+        # BIOS blinks GP26 (location 0x16) on blink generator 1.
+        self.panel = d.FrontPanel(self.io, 0xA20, [0x16, 0], self.cfg)
 
     def pin(self, s, bit):
         return self.io.ports[0xA20 + s - 1] >> bit & 1
@@ -206,6 +206,12 @@ class Leds(unittest.TestCase):
         self.assertEqual(self.pin(3, 0), 0)   # bay 6 = GP30
         self.assertEqual(self.pin(2, 2), 1)
 
+    def test_blink_unmapped_once(self):
+        self.panel.show(True, set())
+        self.io.config[0xF8] = 0x16  # if something maps it again
+        self.panel.show(True, set())
+        self.assertEqual(self.io.config[0xF8], 0x16)
+
     def test_usb_led(self):
         self.panel.show(True, set(), usb=True)
         self.assertEqual(self.pin(5, 0), 0)   # GP50 on
@@ -221,7 +227,7 @@ class Leds(unittest.TestCase):
         self.assertEqual(self.io.ports[0xA21], 0x0F)
         self.assertEqual(self.io.ports[0xA22], 0x9F)
         self.assertEqual(self.io.ports[0xA24], 0xFD)
-        self.assertEqual(self.io.config[0xF8], 0x1D)
+        self.assertEqual(self.io.config[0xF8], 0x16)
 
     def test_panel_state(self):
         class Disks:

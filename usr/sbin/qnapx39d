@@ -374,6 +374,10 @@ class FrontPanel:
     STATUS_GREEN = (3, 5)   # GP35
     STATUS_RED = (3, 4)     # GP34
     USB = (5, 0)            # GP50, blue
+    # The BIOS blinks the green Status LED with blink generator 1 on GP26
+    # (location 0x16); unmapping it leaves the LED solid (checked on the
+    # NAS with tools/it8718-blink-test.py).
+    STATUS_BLINK = (2, 6)
     DISK_RED = {1: (2, 3), 2: (2, 2), 3: (2, 1), 4: (2, 0),
                 5: (3, 1), 6: (3, 0)}
 
@@ -382,6 +386,7 @@ class FrontPanel:
         self.base = base
         self.config = config  # SuperIOConfig, to stop hardware blinking
         self.blink = list(blink)
+        self.unmapped = {}
         pins = [self.STATUS_GREEN, self.STATUS_RED, self.USB] + \
             list(self.DISK_RED.values())
         self.original = {s: self.io.inb(base + s - 1)
@@ -415,15 +420,17 @@ class FrontPanel:
 
     def stop_blink(self, pin):
         """The BIOS blinks the green Status LED in hardware ("booting");
-        unmap it from the blink generator so it can stay on."""
+        unmap that pin from the blink generator so the LED stays on."""
         for n, loc in enumerate(self.blink):
-            if loc == self.location(pin) and self.config:
+            if loc == self.location(pin) and self.config and \
+                    not self.unmapped.get(n):
                 with self.config:
                     self.config.reg(0x07, SuperIOConfig.LDN_GPIO)
                     self.config.reg(0xF8 + 2 * n, 0)
+                self.unmapped[n] = True
 
     def show(self, ok, failed_bays, usb=False):
-        self.stop_blink(self.STATUS_GREEN)
+        self.stop_blink(self.STATUS_BLINK)
         self.set(self.STATUS_GREEN, ok)
         self.set(self.STATUS_RED, not ok)
         self.set(self.USB, usb)

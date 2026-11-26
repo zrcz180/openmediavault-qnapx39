@@ -40,9 +40,13 @@ LEDs (pinos GPIO da IT8718F, Simple I/O em 0x0A20, todos ativos a 0):
 | --- | --- |
 | GP23, GP22, GP21, GP20 | vermelho das baías 1, 2, 3, 4 |
 | GP31, GP30 | vermelho das baías 5, 6 |
-| GP35 | Status verde (o BIOS põe-no a piscar) |
+| GP35 | Status verde |
 | GP34 | Status vermelho |
 | GP50 | USB (azul) |
+
+O BIOS faz piscar o Status com o gerador de pisca 1 ligado ao GP26 (código
+0x16). O plugin desliga esse pisca e o Status fica fixo; volta a piscar
+quando o serviço para.
 
 Baías 1 a 6 = portas ata13, ata2, ata3, ata4, ata9, ata10 (verificado pela
 atividade de cada disco). A porta ata1 não é uma baía.
