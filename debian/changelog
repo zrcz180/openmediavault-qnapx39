@@ -1,3 +1,12 @@
+openmediavault-qnapx39 (7.5.1) stable; urgency=low
+
+  * The green bay lights blink on disk activity again: the plugin keeps
+    the BIOS blink signal on GP26 (Front panel option, on by default).
+    The same signal blinks the green Status light; untick the option
+    for a solid Status light without activity blinking.
+
+ -- Rui <zrcz180@users.noreply.github.com>  Fri, 27 Nov 2026 07:55:00 -0000
+
 openmediavault-qnapx39 (7.5.0) stable; urgency=low
 
   * Fan modes as in QTS: Quiet, Normal, Performance, Custom and Fixed.

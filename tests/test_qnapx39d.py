@@ -212,6 +212,17 @@ class Leds(unittest.TestCase):
         self.panel.show(True, set())
         self.assertEqual(self.io.config[0xF8], 0x16)
 
+    def test_activity_blink_keeps_bios_mapping(self):
+        self.panel.show(True, set(), activity=True)
+        self.assertEqual(self.io.config.get(0xF8, 0x16), 0x16)
+        self.assertEqual(self.pin(3, 5), 0)   # green still enabled
+
+    def test_activity_blink_maps_back(self):
+        self.panel.show(True, set())
+        self.assertEqual(self.io.config[0xF8], 0)
+        self.panel.show(True, set(), activity=True)
+        self.assertEqual(self.io.config[0xF8], 0x16)
+
     def test_usb_led(self):
         self.panel.show(True, set(), usb=True)
         self.assertEqual(self.pin(5, 0), 0)   # GP50 on

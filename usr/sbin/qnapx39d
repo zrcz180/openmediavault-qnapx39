@@ -104,6 +104,9 @@ DEFAULTS = {
     "lcdtimeout": 60,        # backlight off after this many seconds, 0 never
     "lcdpower": True,        # Shutdown/Reboot menu on the LCD
     "statusled": True,       # drive the Status LED (else leave it to BIOS)
+    # Keep the BIOS blink generator on GP26: it also blinks the green bay
+    # lights on disk activity, but makes the green Status light blink.
+    "activityblink": True,
     "volumefull": 95,        # % used that counts as a full volume
     "night": False,          # Status green and LCD light off at night
     "nightstart": "22:00",
@@ -516,12 +519,28 @@ class FrontPanel:
                     self.config.reg(0xF8 + 2 * n, 0)
                 self.unmapped[n] = True
 
+    def keep_blink(self):
+        """Map the blink generators back as the BIOS left them."""
+        if not any(self.unmapped.values()):
+            return
+        with self.config:
+            self.config.reg(0x07, SuperIOConfig.LDN_GPIO)
+            for n, loc in enumerate(self.blink):
+                if self.unmapped.get(n):
+                    self.config.reg(0xF8 + 2 * n, loc)
+        self.unmapped = {}
+
     def show(self, ok, failed_bays, usb=False, status=True, disks=True,
-             night=False):
+             night=False, activity=False):
         """status / disks: drive those LEDs at all (else the BIOS state
-        stays). At night the green Status LED is off; red still shows."""
+        stays). At night the green Status LED is off; red still shows.
+        activity: keep the BIOS blink on GP26, which blinks the green bay
+        lights on disk activity (and the green Status light)."""
         if status:
-            self.stop_blink(self.STATUS_BLINK)
+            if activity:
+                self.keep_blink()
+            else:
+                self.stop_blink(self.STATUS_BLINK)
             self.set(self.STATUS_GREEN, ok and not night)
             self.set(self.STATUS_RED, not ok)
         if disks:
@@ -1479,7 +1498,7 @@ def load_config(path=None):
     config["volumefull"] = int(config["volumefull"])
     if config["powerloss"] not in ("on", "off", "bios"):
         config["powerloss"] = "bios"
-    for key in ("statusled", "night"):
+    for key in ("statusled", "night", "activityblink"):
         config[key] = bool(config[key])
     config.update(PRESETS.get(config["fanmode"], {}))
     config["fans"] = parse_list(config["fans"], int)
@@ -1658,7 +1677,8 @@ def run(config):
             if panel:
                 try:
                     panel.show(ok, failed_bays, usb_disk_present(),
-                               config["statusled"], config["leds"], night)
+                               config["statusled"], config["leds"], night,
+                               config["activityblink"])
                 except OSError as e:
                     log.error("Failed to set the LEDs: %s", e)
             st = {

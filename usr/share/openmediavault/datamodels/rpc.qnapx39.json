@@ -195,6 +195,10 @@
 					"type": "boolean",
 					"required": true
 				},
+				"activityblink": {
+					"type": "boolean",
+					"required": true
+				},
 				"volumefull": {
 					"type": "integer",
 					"minimum": 50,

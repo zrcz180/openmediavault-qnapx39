@@ -159,6 +159,10 @@
 			"type": "boolean",
 			"default": true
 		},
+		"activityblink": {
+			"type": "boolean",
+			"default": true
+		},
 		"volumefull": {
 			"type": "integer",
 			"default": 95,

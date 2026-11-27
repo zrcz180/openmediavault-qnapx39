@@ -92,6 +92,7 @@ configure_qnapx39d:
         lcdpower: {{ config.lcdpower | to_bool | json }}
         notify: {{ notify | json }}
         statusled: {{ config.statusled | to_bool | json }}
+        activityblink: {{ config.activityblink | to_bool | json }}
         volumefull: {{ config.volumefull }}
         night: {{ config.night | to_bool | json }}
         nightstart: {{ config.nightstart | json }}
