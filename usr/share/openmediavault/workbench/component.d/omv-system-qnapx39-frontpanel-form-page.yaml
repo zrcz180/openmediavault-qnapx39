@@ -17,6 +17,17 @@ data:
         value: true
         hint: _("Works like QTS. Green means all is well. Red means a failed fan, a failed disk, a degraded RAID, a critical temperature or a volume that is nearly full. Untick to leave it blinking as the BIOS does.")
       - type: checkbox
+        name: activityblink
+        label: _("Blink the green bay lights on disk activity")
+        value: true
+        hint: _("The chip has one blink signal for both. With this on, the green bay lights blink while a disk works, but the green Status light also blinks. Off makes the Status light solid green and the bay lights stay on without blinking.")
+        modifiers:
+          - type: visible
+            constraint:
+              operator: truthy
+              arg0:
+                prop: statusled
+      - type: checkbox
         name: leds
         label: _("Use the disk and USB lights")
         value: true
