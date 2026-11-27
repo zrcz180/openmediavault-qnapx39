@@ -17,7 +17,7 @@ kernel, os pinos GPIO da IT8718F e a porta série do ecrã. Do original
 vêm a estrutura do plugin (Salt, páginas da interface, painel, gráficos),
 o leitor de temperaturas dos discos e os emails de avaria.
 
-Versão atual: **7.5.1** (OpenMediaVault 7, Debian 12 "bookworm").
+Versão atual: **7.5.2** (OpenMediaVault 7, Debian 12 "bookworm").
 
 ## O que está incorporado
 
@@ -131,7 +131,7 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
 
 ## Instalar
 
-1. Descarregar o `openmediavault-qnapx39_7.5.1_all.deb` da página
+1. Descarregar o `openmediavault-qnapx39_7.5.2_all.deb` da página
    [Releases](https://github.com/zrcz180/openmediavault-qnapx39/releases)
    (ou construí-lo, ver abaixo).
 2. Se tinha outro programa a usar o ecrã (por exemplo um serviço
@@ -141,7 +141,7 @@ Páginas (SELECT mostra a seguinte, ENTER a anterior):
    ```
 3. Instalar:
    ```sh
-   sudo dpkg -i openmediavault-qnapx39_7.5.1_all.deb
+   sudo dpkg -i openmediavault-qnapx39_7.5.2_all.deb
    ```
 4. Em Sistema > QNAP > Fan control, ativar, **Guardar** e **Aplicar**.
 

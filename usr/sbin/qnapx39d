@@ -467,6 +467,7 @@ class FrontPanel:
     # (location 0x16); unmapping it leaves the LED solid (checked on the
     # NAS with tools/it8718-blink-test.py).
     STATUS_BLINK = (2, 6)
+    BIOS_BLINK_CONTROL = 0x02   # blink 1 control as the BIOS sets it
     DISK_RED = {1: (2, 3), 2: (2, 2), 3: (2, 1), 4: (2, 0),
                 5: (3, 1), 6: (3, 0)}
 
@@ -520,14 +521,19 @@ class FrontPanel:
                 self.unmapped[n] = True
 
     def keep_blink(self):
-        """Map the blink generators back as the BIOS left them."""
-        if not any(self.unmapped.values()):
+        """Make sure blink generator 1 drives GP26 as the BIOS sets it,
+        even if an earlier run left it unmapped (checked on every call,
+        as cheap as two register reads)."""
+        if not self.config:
             return
+        loc = self.location(self.STATUS_BLINK)
         with self.config:
             self.config.reg(0x07, SuperIOConfig.LDN_GPIO)
-            for n, loc in enumerate(self.blink):
-                if self.unmapped.get(n):
-                    self.config.reg(0xF8 + 2 * n, loc)
+            if not any(self.config.reg(0xF8 + 2 * n) == loc
+                       for n in range(2)):
+                self.config.reg(0xF8, loc)
+                if not self.config.reg(0xF9):
+                    self.config.reg(0xF9, self.BIOS_BLINK_CONTROL)
         self.unmapped = {}
 
     def show(self, ok, failed_bays, usb=False, status=True, disks=True,

@@ -223,6 +223,13 @@ class Leds(unittest.TestCase):
         self.panel.show(True, set(), activity=True)
         self.assertEqual(self.io.config[0xF8], 0x16)
 
+    def test_activity_blink_maps_after_earlier_run(self):
+        self.io.config[0xF8] = 0      # left unmapped by an older version
+        self.io.config[0xF9] = 0
+        self.panel.show(True, set(), activity=True)
+        self.assertEqual(self.io.config[0xF8], 0x16)
+        self.assertEqual(self.io.config[0xF9], 0x02)
+
     def test_usb_led(self):
         self.panel.show(True, set(), usb=True)
         self.assertEqual(self.pin(5, 0), 0)   # GP50 on
