@@ -10,7 +10,9 @@ It reads the disk in that bay (read only, nothing is written to it) for
 8 seconds in each step and asks whether its green LED blinked:
   1. as the BIOS left the chip (the plugin is stopped),
   2. with blink generator 1 unmapped from GP26, as the plugin does,
-  3. flipping, one at a time, each output pin with no known use.
+
+Step 3 (flipping pins with no known use) was removed: on 2026-11-27 it
+froze the NAS. One of those pins probably resets a SATA controller.
 Every register is put back at the end, also on Ctrl-C.
 """
 import os
@@ -22,7 +24,6 @@ INDEX, KEY = 0x2E, bytes([0x87, 0x01, 0x55, 0x55])
 BAYS = {1: "pci-0000:00:1f.1-ata-1", 2: "pci-0000:03:00.0-ata-2",
         3: "pci-0000:03:00.0-ata-3", 4: "pci-0000:03:00.0-ata-4",
         5: "pci-0000:04:00.0-ata-1", 6: "pci-0000:04:00.0-ata-2"}
-UNKNOWN = [(1, 1), (1, 2), (1, 3), (1, 4), (2, 7), (3, 2), (3, 3)]
 
 
 class Port:
@@ -97,14 +98,6 @@ def main():
         read_disk(dev, 8)
         results.append(("blink1 unmapped", ask("Step 2.")))
         config(io, [(0xF8, f8), (0xF9, f9)])
-        for s, bit in UNKNOWN:
-            addr = base + s - 1
-            io.outb(addr, sets[s] ^ 1 << bit)
-            print("Step 3: GP%d%d flipped, reading 8 s" % (s, bit))
-            read_disk(dev, 8)
-            io.outb(addr, sets[s])
-            results.append(("GP%d%d flipped" % (s, bit),
-                            ask("GP%d%d." % (s, bit))))
     finally:
         for s, v in sets.items():
             io.outb(base + s - 1, v)
